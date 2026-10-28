@@ -108,15 +108,15 @@ ul.list li.ipg { align-items: center; padding: 12px 0; }
    --gl1 / --gl2: light and dark colour of the glass (r, g, b); --c0..--c3: its base from dark to bright. */
 :root { --gl1: 255,255,255; --gl2: 0,0,0; --c0: #181818; --c1: #444; --c2: #8c8c8c; --c3: #f6f6f6; --band: #050505; --bt: #fff; }
 :root[data-theme="light"] { --gl1: 0,0,0; --gl2: 255,255,255; --c0: #e8e8e8; --c1: #b9b9b9; --c2: #727272; --c3: #0b0b0b; --band: #f8f8f5; --bt: #0b0b0b; }
-/* the shape: one pill at least 44 px high, corners of 22 px (title up to two lines, then the "change" end of the same glass); drawn as a mask of gradients on the
+/* the shape: one pill at least 34 px high, corners of 17 px (title up to two lines, then the "change" end of the same glass); drawn as a mask of gradients on the
    texture, so title and end share it without a seam */
 .gbtn { --p0: 0px; --r: 1; --b0: 85%; --dir: 90deg; --b: var(--b0); --q: var(--b0); --p: var(--p0);
   --shape-img: linear-gradient(#000, #000), linear-gradient(#000, #000), linear-gradient(#000, #000),
-    radial-gradient(circle at 100% 100%, #000 21.5px, transparent 22.5px), radial-gradient(circle at 0 100%, #000 21.5px, transparent 22.5px),
-    radial-gradient(circle at 100% 0, #000 21.5px, transparent 22.5px), radial-gradient(circle at 0 0, #000 21.5px, transparent 22.5px);
-  --shape-size: calc(100% - 40px) 100%, 22px calc(100% - 40px), 22px calc(100% - 40px), 22px 22px, 22px 22px, 22px 22px, 22px 22px;   /* the parts overlap by 2 px: no hairline seams */
-  --shape-pos: 20px 0, 0 20px, 100% 20px, 0 0, 100% 0, 0 100%, 100% 100%;
-  position: relative; display: inline-flex; align-items: center; flex: 0 1 auto; max-width: 100%; min-height: 44px;
+    radial-gradient(circle at 100% 100%, #000 16.5px, transparent 17.5px), radial-gradient(circle at 0 100%, #000 16.5px, transparent 17.5px),
+    radial-gradient(circle at 100% 0, #000 16.5px, transparent 17.5px), radial-gradient(circle at 0 0, #000 16.5px, transparent 17.5px);
+  --shape-size: calc(100% - 30px) 100%, 17px calc(100% - 30px), 17px calc(100% - 30px), 17px 17px, 17px 17px, 17px 17px, 17px 17px;   /* the parts overlap by 2 px: no hairline seams */
+  --shape-pos: 15px 0, 0 15px, 100% 15px, 0 0, 100% 0, 0 100%, 100% 100%;
+  position: relative; display: inline-flex; align-items: center; flex: 0 1 auto; max-width: 100%; min-height: 34px;
   isolation: isolate; color: var(--bt); font: 600 14px var(--sans); }
 .gbtn::before {
   content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
@@ -132,7 +132,7 @@ ul.list li.ipg { align-items: center; padding: 12px 0; }
   -webkit-mask-image: var(--shape-img); mask-image: var(--shape-img); -webkit-mask-size: var(--shape-size); mask-size: var(--shape-size);
   -webkit-mask-position: var(--shape-pos); mask-position: var(--shape-pos); -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; }
 /* a thin outline along the edge: no glass texture, a plain line that is lit where the light zones of the glass are (--b, --q) */
-.gring { position: absolute; inset: 0; z-index: 1; pointer-events: none; border-radius: 22px; padding: 1.5px;
+.gring { position: absolute; inset: 0; z-index: 1; pointer-events: none; border-radius: 17px; padding: 1.5px;
   background:
     linear-gradient(90deg, rgba(var(--gl1), 0) calc(var(--b) - 22%), rgba(var(--gl1), 1) var(--b), rgba(var(--gl1), 0) calc(var(--b) + 22%)),
     linear-gradient(90deg, rgba(var(--gl1), 0) calc(var(--q) - 18%), rgba(var(--gl1), .6) var(--q), rgba(var(--gl1), 0) calc(var(--q) + 18%)),
@@ -145,8 +145,8 @@ ul.list li.ipg { align-items: center; padding: 12px 0; }
   background: linear-gradient(180deg, rgba(var(--gl1), .5), rgba(var(--gl1), 0) 22%),
     linear-gradient(112deg, rgba(var(--gl1), 0) 28%, rgba(var(--gl1), .26) 40%, rgba(var(--gl1), 0) 52%),
     linear-gradient(0deg, rgba(var(--gl1), .22), rgba(var(--gl1), 0) 16%); }
-a.glass > span, .gedit > span { position: relative; z-index: 1; isolation: isolate; display: block; padding: 3px 18px; }
-a.glass > span::before, .gedit > span::before { content: ""; position: absolute; inset: -5px -8px; z-index: -1; border-radius: 999px; background: var(--band);
+a.glass > span, .gedit > span { position: relative; z-index: 1; isolation: isolate; display: block; padding: 2px 16px; }
+a.glass > span::before, .gedit > span::before { content: ""; position: absolute; inset: -4px -7px; z-index: -1; border-radius: 999px; background: var(--band);
   -webkit-mask-image: linear-gradient(90deg, transparent, #000 24px, #000 calc(100% - 24px), transparent), linear-gradient(180deg, transparent, #000 40%, #000 60%, transparent);
   -webkit-mask-composite: source-in;
   mask-image: linear-gradient(90deg, transparent, #000 24px, #000 calc(100% - 24px), transparent), linear-gradient(180deg, transparent, #000 40%, #000 60%, transparent);
@@ -158,12 +158,12 @@ a.glass > span::before, .gedit > span::before { content: ""; position: absolute;
 @property --p { syntax: "<length>"; inherits: true; initial-value: 0px; }
 /* the movement itself is driven from the script below (glassIn / glassOut): the same loop, but it is never cut: on leaving it
    runs on to its end (where the glass is at rest) a little faster, and a quick in-and-out never jumps */
-a.glass { display: flex; align-items: center; justify-content: center; flex: 1 1 auto; min-width: 0; min-height: 44px; padding: 9px 8px 9px 22px; }
+a.glass { display: flex; align-items: center; justify-content: center; flex: 1 1 auto; min-width: 0; min-height: 34px; padding: 6px 6px 6px 18px; }
 a.glass > span { min-width: 0; max-width: 100%; }
 a.glass > span > i { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; font-style: normal; overflow: hidden; line-height: 1.3; text-align: center; overflow-wrap: anywhere; }
-.gedit { position: relative; z-index: 1; display: flex; align-items: center; justify-content: center; flex: none; align-self: stretch; margin: 0; padding: 0 18px 0 4px; border: 0; background: none;
+.gedit { position: relative; z-index: 1; display: flex; align-items: center; justify-content: center; flex: none; align-self: stretch; margin: 0; padding: 0 14px 0 4px; border: 0; background: none;
   color: var(--bt); cursor: pointer; font: 600 12px var(--sans); }
-.gedit > span { padding: 2px 16px; }
+.gedit > span { padding: 1px 14px; }
 .gedit:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 .gbtn > a:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; border-radius: 12px; }
 [hidden] { display: none !important; }   /* .btn sets display, which would show a hidden button */
