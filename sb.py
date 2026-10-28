@@ -1624,6 +1624,14 @@ def gate_text(gate, short=False):
     return L(f"використано {pct} % ліміту", f"{pct} % of the limit is used") if short else         L(f"використано {pct} % ліміту, чекаю на «Продовжити»", f"{pct} % of the limit is used, waiting for “Continue”")
 
 
+def run_claude(sp, prompt, cwd, add_dirs, timeout, role, max_usd):
+    """The Claude Code engine. The 70/80/90 % stop is about the Claude window only: OpenRouter has its own limits."""
+    gate = sp.limit_gate()
+    if gate:
+        raise LimitGateError(gate_text(gate))
+    return run_claude_cli(sp, prompt, cwd, add_dirs, timeout, role, max_usd)
+
+
 def run_llm(sp, prompt, cwd, add_dirs=(), timeout=2400, need_vision=False, role=None, max_usd=None):
     """Run one agentic task with the engine this person chose. need_vision: the task shows images (OpenRouter auto mode
     then only uses models that can see). role: see ROLE_MODELS (the model: Claude only; OpenRouter uses the chosen
@@ -1631,10 +1639,7 @@ def run_llm(sp, prompt, cwd, add_dirs=(), timeout=2400, need_vision=False, role=
     if sp.engine() == "openrouter":
         r = run_openrouter(sp, prompt, cwd, add_dirs, timeout, need_vision, role)
     else:
-        gate = sp.limit_gate()          # the 70/80/90 % stop is about the Claude window only: OpenRouter has its own limits (or_cool_all)
-        if gate:
-            raise LimitGateError(gate_text(gate))
-        r = run_claude_cli(sp, prompt, cwd, add_dirs, timeout, role, max_usd)
+        r = run_claude(sp, prompt, cwd, add_dirs, timeout, role, max_usd)
     if sp.prof().get("blocked"):        # the engine works again: a 250-page upload must not say "paused" for hours
         set_blocked(sp, None)
     return r
@@ -2293,8 +2298,31 @@ def process_submission(sp, sdir, group=()):
         return add_ipages(sp, sdir, sub)
 
     work = sp.d["work"] / sid
+    pages, unsupported = upload_pages(work, dirs, subs)
+    require_engine_sees(sp, pages)
+    results = transcribe_chunks(sp, subs, work, pages)
+
+    # the shared book: entries of the same lecture from other people are merged (fused) — model calls first, all of
+    # them resumable; nothing in the library is touched before every one is done
+    tgt = shared_target(sp)
+    fusions = draft_fusions(sp, tgt, results)
+
+    # everything is ready — only now touch the library
+    placed = place_results(sp, tgt, sub, subs, results, fusions, pages)
+    finish_uploads(sp, tgt, dirs, subs, placed, unsupported, group)
+    all_placed = [p for ps in placed.values() for p in ps]
+    tgt.git_commit(f"add {', '.join(ids)}" + (f" by {sp.uid}" if tgt is not sp else "") + ": "
+                   + "; ".join(p["title"] for p in all_placed))
+    log(f"[{sp.uid}] {', '.join(ids)} -> {len(all_placed)} entries"
+        + (f" in {tgt.uid}" if tgt is not sp else "")
+        + (f", {sum(1 for p in all_placed if p.get('fused'))} merged into an existing lecture" if fusions else ""))
+
+
+def upload_pages(work, dirs, subs):
+    """The pages of the uploads (images or text), made once and kept in work/pages.json: -> (pages, unsupported files by upload)."""
+    ids = [s["id"] for s in subs]
     pj = read_json(work / "pages.json")
-    if not pj or pj.get("members", [sid]) != ids:
+    if not pj or pj.get("members", ids[:1]) != ids:
         shutil.rmtree(work, ignore_errors=True)
         pages, unsupported = [], {}
         for d, s in zip(dirs, subs):
@@ -2306,25 +2334,35 @@ def process_submission(sp, sdir, group=()):
     pj = read_json(work / "pages.json")
     pages, unsupported = pj["pages"], pj["unsupported"]
     if isinstance(unsupported, list):            # written by the older code: one upload
-        unsupported = {sid: unsupported}
+        unsupported = {ids[0]: unsupported}
     if not pages:
         raise PermanentError(L("жодного файлу не вдалося прочитати: ", "no file could be read: ")
                              + ", ".join(x for u in unsupported.values() for x in u))
+    return pages, unsupported
+
+
+def require_engine_sees(sp, pages):
+    """Photos and PDF pages need a model that can see: refuse early, with the way out, instead of failing in a chunk."""
     seen = [p for p in pages if p["image"] and not p.get("text_only")]
-    if sp.engine() == "openrouter" and sp.or_model() == OR_AUTO and seen:
+    if sp.engine() != "openrouter" or not seen:
+        return
+    if sp.or_model() == OR_AUTO:
         if not any(m["enabled"] and m["vision"] for m in or_free_ranked(sp, fetch=False)):
             raise PermanentError(L("У списку безкоштовних моделей немає жодної увімкненої зі зором, а в завантаженні є фото "
                                    "чи сторінки PDF. Увімкни модель зі зором (👁) і натисни «Ще раз».",
                                    "The list of free models has no enabled model with vision, while the upload has photos "
                                    "or PDF pages. Enable a model with vision (👁) and press “Retry”."))
-    elif sp.engine() == "openrouter" and seen:
-        mi = or_model_info(sp.or_model(), fetch=False)
-        if mi and not mi["vision"]:
-            raise PermanentError(L(f"Обрана модель OpenRouter ({mi['id']}) не бачить зображень, а в завантаженні є фото чи "
-                                   "сторінки PDF. Обери модель з підтримкою зображень і натисни «Ще раз».",
-                                   f"The chosen OpenRouter model ({mi['id']}) cannot see images, while the upload has photos "
-                                   "or PDF pages. Choose a model that supports images and press “Retry”."))
+        return
+    mi = or_model_info(sp.or_model(), fetch=False)
+    if mi and not mi["vision"]:
+        raise PermanentError(L(f"Обрана модель OpenRouter ({mi['id']}) не бачить зображень, а в завантаженні є фото чи "
+                               "сторінки PDF. Обери модель з підтримкою зображень і натисни «Ще раз».",
+                               f"The chosen OpenRouter model ({mi['id']}) cannot see images, while the upload has photos "
+                               "or PDF pages. Choose a model that supports images and press “Retry”."))
 
+
+def transcribe_chunks(sp, subs, work, pages):
+    """Every chunk of CHUNK pages through the model (finished chunks are skipped): -> [(chunk dir, checked result)]."""
     chunks = [pages[i:i + CHUNK] for i in range(0, len(pages), CHUNK)]
     originals = {}                  # stored file name -> the name the person's file had
     for s in subs:
@@ -2346,10 +2384,11 @@ def process_submission(sp, sdir, group=()):
                        else str(chunk[0]["n"]), cur_files=files[:6], cur_pass=None, cur_model=None, cur_turn=None)
             process_chunk(sp, subs, work, cw, chunk, ci, len(chunks))
         results.append((cw, read_json(cw / "result.checked.json")))
+    return results
 
-    # the shared book: entries of the same lecture from other people are merged (fused) — model calls first, all of
-    # them resumable; nothing in the library is touched before every one is done
-    tgt = shared_target(sp)
+
+def draft_fusions(sp, tgt, results):
+    """Entries of a lecture that is already in the shared book: the model drafts the merge. -> {(chunk dir, entry n): draft}"""
     fusions, used = {}, set()
     for cw, res in results:
         for e in res["entries"]:
@@ -2362,16 +2401,19 @@ def process_submission(sp, sdir, group=()):
                 fusions[(str(cw), e["n"])] = fuse_draft(sp, tgt, hit, cw, e)
             elif hit:
                 fusions[(str(cw), e["n"])] = {"dir": str(hit), "ok": False}
+    return fusions
 
-    # everything is ready — only now touch the library
+
+def place_results(sp, tgt, sub, subs, results, fusions, pages):
+    """Write the entries into the library (a merge, or an entry of their own): -> {upload id: [placed entries]}"""
     set_status(cur_pass="place", cur_pass_since=now_iso(), cur_model=None, cur_turn=None)
     syl = tgt.load_syllabus()
     by_id, by_n = {s["id"]: s for s in subs}, {p["n"]: p for p in pages}
-    placed, order = {i: [] for i in ids}, 0
+    placed, order = {s["id"]: [] for s in subs}, 0
     for cw, res in results:
         for e in res["entries"]:
             order += 1
-            owner = by_n[e["pages"][0]].get("upload") or sid
+            owner = by_n[e["pages"][0]].get("upload") or sub["id"]
             fz = fusions.get((str(cw), e["n"]))
             done = fuse_apply(tgt, fz, cw, e, by_id[owner], pages, sp.uid) if fz and fz.get("ok") else None
             if done is None:
@@ -2383,6 +2425,12 @@ def process_submission(sp, sdir, group=()):
     tgt.save_syllabus(syl)
     for subj in {p["subject"] for ps in placed.values() for p in ps}:
         tgt.mark_dirty(subj)
+    return placed
+
+
+def finish_uploads(sp, tgt, dirs, subs, placed, unsupported, group):
+    """Mark the uploads done and move them to `processed`; the work folders go only now (they hold the only copy of the chunks)."""
+    ids = [s["id"] for s in subs]
     for d, s in zip(dirs, subs):
         s["done_at"] = now_iso()
         s["entries"] = [p["path"] for p in placed[s["id"]]]
@@ -2398,12 +2446,6 @@ def process_submission(sp, sdir, group=()):
     sp.update_profile(last_ingest=time.time())
     if tgt is not sp:
         tgt.update_profile(last_ingest=time.time())     # the shared book's chapter summaries wait for quiet as well
-    all_placed = [p for ps in placed.values() for p in ps]
-    tgt.git_commit(f"add {', '.join(ids)}" + (f" by {sp.uid}" if tgt is not sp else "") + ": "
-                   + "; ".join(p["title"] for p in all_placed))
-    log(f"[{sp.uid}] {', '.join(ids)} -> {len(all_placed)} entries"
-        + (f" in {tgt.uid}" if tgt is not sp else "")
-        + (f", {sum(1 for p in all_placed if p.get('fused'))} merged into an existing lecture" if fusions else ""))
 
 
 # ---- several small uploads at once: one model call per pass for all of them
@@ -5289,17 +5331,8 @@ def progress_view(sp, st, path, kind):
     return out
 
 
-def status(sp):
-    st = read_json(STATUS, {}) or {}
-    prof = read_json(sp.profile, {}) or {}
-    worker_view = {"state": st.get("state", "idle"), "last_run": st.get("last_run"),
-                   "current": st.get("current") if st.get("current_uid") == sp.uid else
-                   (L("обробляє чергу іншої людини", "processing another person's queue") if st.get("state") == "busy" else None)}
-    syl = sp.load_syllabus()
-    # what is happening to each book right now: Claude reading/writing, the PDFs being built, or waiting
-    pid = st.get("pid")
-    busy_here = worker_busy_for(sp)
-    dirty = set(read_json(sp.dirty, []) or [])
+def waiting_work(sp, st, prof, busy_here):
+    """What is queued, by subject: -> (subjects with work waiting, work with no subject yet, {subject: pages being made})."""
     waiting, auto_waiting, making, run_now = set(), False, {}, set(prof.get("run_now") or [])
     for _, kind, path in pending_items(sp):
         m = read_json(item_meta_path(kind, path), {}) or {}
@@ -5315,63 +5348,79 @@ def status(sp):
             waiting.add(subj)
         else:
             auto_waiting = True
-    cur_subj, cur_phase = st.get("current_subject"), st.get("current_phase")
-    auto_activity = ("ingest" if busy_here and cur_phase == "ingest" and not cur_subj else
-                     "queued" if auto_waiting else None)
-    subjects = []
-    for s in syl["subjects"]:
-        activity = (cur_phase if busy_here and cur_subj == s["id"] else
-                    "build" if s["id"] in dirty or (busy_here and s["id"] in (st.get("build_pending") or []))
-                    else "queued" if s["id"] in waiting else None)
-        ents = entries_of(sp, s["id"])
-        counts = {}
-        for m in ents:
-            counts[m["topic"]] = counts.get(m["topic"], 0) + 1
-        books = {}
-        for ed in ("clean", "original"):
-            f = sp.d["books"] / s["id"] / f"{ed}.pdf"
-            if f.exists():
-                books[ed] = {"url": f"/books/{s['id']}/{ed}.pdf", "updated": dt.datetime.fromtimestamp(
-                    f.stat().st_mtime, TZ).isoformat(timespec="seconds"), "bytes": f.stat().st_size}
-        inter = []
-        for meta in sorted((sp.d["interactive"] / s["id"]).glob("*.json")):
-            m = read_json(meta, {})
-            inter.append({"title": m.get("title"), "topic": m.get("topic_title") or m.get("topic"), "stem": meta.stem,
-                          "url": f"/i/{s['id']}/{meta.stem}.html", "added": m.get("added"), "by": m.get("by"),
-                          "edited": m.get("edited"), "can_undo": meta.with_name(meta.stem + ".prev.html").exists()})
-        days = {}
-        topic_title = {t["id"]: t["title"] for t in s["topics"]}
-        for m in ents:
-            by = entry_by(m, sp.uid)
-            helpers = []
-            for c in m.get("contributors") or []:
-                if c.get("by") and c["by"] != by and c["by"] not in helpers:
-                    helpers.append(c["by"])
-            days.setdefault(m["date"], []).append({"topic": m["topic"], "topic_title": topic_title.get(m["topic"], m["topic"]),
-                                                   "entry": m["dir"].name, "title": m["title"],
-                                                   "kind": m.get("kind"), "asis": bool(m.get("asis")),
-                                                   "added": m["added"], "by": by, "by_name": display_name(by),
-                                                   "with": [display_name(u) for u in helpers],
-                                                   "merged": len(m.get("contributors") or []),
-                                                   "mine": True})       # the library's owner may move every entry
-        targets = [{"type": "entry", "topic": m["topic"], "entry": m["dir"].name, "title": m["title"],
-                    "group": day_short(m["date"])} for m in ents if not m.get("asis")]
-        targets += [{"type": "interactive", "stem": i["stem"], "title": i["title"], "group": L("Інтерактивні сторінки", "Interactive pages")}
-                    for i in inter]
-        exams = [m | {"tickets_url": f"/exams/{s['id']}/{m['id']}/tickets.pdf", "answers_url": f"/exams/{s['id']}/{m['id']}/answers.pdf"}
-                 for m in exam_sets(sp, s["id"])]
-        subjects.append({"id": s["id"], "title": s["title"], "code": s.get("code", ""), "entries": len(ents), "exams": exams,
-                         "making": making.get(s["id"], []),
-                         "topics": [{"id": t["id"], "title": t["title"], "entries": counts.get(t["id"], 0)}
-                                    for t in s["topics"]],
-                         "days": [{"date": d, "entries": v} for d, v in sorted(days.items())],
-                         "books": books, "interactive": inter, "activity": activity, "targets": targets,
-                         "refs": _refs_list(sp.d["refs"], s["id"]),
-                         "open_refs": _refs_list(REFS_OPEN, s["id"]),
-                         "last_added": max((m["added"] for m in ents), default=None)})
-    queue = []
-    deleting = sp.cancel_ids()
+    return waiting, auto_waiting, making
+
+
+def book_files(sp, subject):
+    """The PDF books of one subject that exist: {edition: {url, updated, bytes}}."""
+    books = {}
+    for ed in ("clean", "original"):
+        f = sp.d["books"] / subject / f"{ed}.pdf"
+        if f.exists():
+            books[ed] = {"url": f"/books/{subject}/{ed}.pdf", "updated": dt.datetime.fromtimestamp(
+                f.stat().st_mtime, TZ).isoformat(timespec="seconds"), "bytes": f.stat().st_size}
+    return books
+
+
+def interactive_pages(sp, subject):
+    """The interactive pages of one subject, in file order (`by` is the raw uid: the web layer turns it into `mine`)."""
+    out = []
+    for meta in sorted((sp.d["interactive"] / subject).glob("*.json")):
+        m = read_json(meta, {})
+        out.append({"title": m.get("title"), "topic": m.get("topic_title") or m.get("topic"), "stem": meta.stem,
+                    "url": f"/i/{subject}/{meta.stem}.html", "added": m.get("added"), "by": m.get("by"),
+                    "edited": m.get("edited"), "can_undo": meta.with_name(meta.stem + ".prev.html").exists()})
+    return out
+
+
+def class_days(sp, ents, topics):
+    """The entries grouped by the day of the class: {date: [entry view]}."""
+    topic_title = {t["id"]: t["title"] for t in topics}
+    days = {}
+    for m in ents:
+        by = entry_by(m, sp.uid)
+        helpers = []
+        for c in m.get("contributors") or []:
+            if c.get("by") and c["by"] != by and c["by"] not in helpers:
+                helpers.append(c["by"])
+        days.setdefault(m["date"], []).append({"topic": m["topic"], "topic_title": topic_title.get(m["topic"], m["topic"]),
+                                               "entry": m["dir"].name, "title": m["title"],
+                                               "kind": m.get("kind"), "asis": bool(m.get("asis")),
+                                               "added": m["added"], "by": by, "by_name": display_name(by),
+                                               "with": [display_name(u) for u in helpers],
+                                               "merged": len(m.get("contributors") or []),
+                                               "mine": True})       # the library's owner may move every entry
+    return days
+
+
+def subject_view(sp, s, activity, making):
+    """One subject of the status: its entries by day, books, interactive pages, exams, textbooks."""
+    ents = entries_of(sp, s["id"])
+    counts = {}
+    for m in ents:
+        counts[m["topic"]] = counts.get(m["topic"], 0) + 1
+    inter = interactive_pages(sp, s["id"])
+    targets = [{"type": "entry", "topic": m["topic"], "entry": m["dir"].name, "title": m["title"],
+                "group": day_short(m["date"])} for m in ents if not m.get("asis")]
+    targets += [{"type": "interactive", "stem": i["stem"], "title": i["title"], "group": L("Інтерактивні сторінки", "Interactive pages")}
+                for i in inter]
+    exams = [m | {"tickets_url": f"/exams/{s['id']}/{m['id']}/tickets.pdf", "answers_url": f"/exams/{s['id']}/{m['id']}/answers.pdf"}
+             for m in exam_sets(sp, s["id"])]
+    return {"id": s["id"], "title": s["title"], "code": s.get("code", ""), "entries": len(ents), "exams": exams,
+            "making": making,
+            "topics": [{"id": t["id"], "title": t["title"], "entries": counts.get(t["id"], 0)} for t in s["topics"]],
+            "days": [{"date": d, "entries": v} for d, v in sorted(class_days(sp, ents, s["topics"]).items())],
+            "books": book_files(sp, s["id"]), "interactive": inter, "activity": activity, "targets": targets,
+            "refs": _refs_list(sp.d["refs"], s["id"]),
+            "open_refs": _refs_list(REFS_OPEN, s["id"]),
+            "last_added": max((m["added"] for m in ents), default=None)}
+
+
+def queue_view(sp, st, prof, busy_here):
+    """The waiting items (uploads, requests, suggestions); the one being worked on shows its progress."""
+    run_now, deleting = set(prof.get("run_now") or []), sp.cancel_ids()
     members = set(st.get("cur_members") or []) | ({st["cur_item"]} if st.get("cur_item") else set())
+    queue = []
     for _, kind, path in pending_items(sp):
         m = read_json(item_meta_path(kind, path), {})
         q = {"id": path.name, "type": kind, "kind": m.get("kind"), "subject": m.get("subject"), "label": m.get("label") or m.get("text", "")[:80],
@@ -5385,19 +5434,31 @@ def status(sp):
         if busy_here and path.stem in members:
             q["progress"] = progress_view(sp, st, path, kind)
         queue.append(q)
-    failed = []
+    return queue
+
+
+def failed_view(sp):
+    out = []
     for path in sorted(sp.d["failed"].iterdir(), reverse=True)[:15]:
         m = read_json(path / "submission.json" if path.is_dir() else path, {})
-        failed.append({"id": path.name, "label": m.get("label") or m.get("text", "")[:80],
-                       "error": m.get("last_error"), "file_links": file_links(m, path) if path.is_dir() else []})
-    recent = []
+        out.append({"id": path.name, "label": m.get("label") or m.get("text", "")[:80],
+                    "error": m.get("last_error"), "file_links": file_links(m, path) if path.is_dir() else []})
+    return out
+
+
+def recent_view(sp):
+    out = []
     for path in sorted(sp.d["processed"].iterdir(), reverse=True)[:10]:
         m = read_json(path / "submission.json", {})
-        recent.append({"id": path.name, "label": m.get("label"), "done_at": m.get("done_at"), "file_links": file_links(m, path),
-                       "date": sub_date(m) if m.get("uploaded_at") and m.get("kind") != "reference" else None,
-                       "entries": [e.split("/")[-1] for e in m.get("entries", [])],
-                       "refs": m.get("refs_added"), "unsupported": m.get("unsupported")})
-    sugs = []
+        out.append({"id": path.name, "label": m.get("label"), "done_at": m.get("done_at"), "file_links": file_links(m, path),
+                    "date": sub_date(m) if m.get("uploaded_at") and m.get("kind") != "reference" else None,
+                    "entries": [e.split("/")[-1] for e in m.get("entries", [])],
+                    "refs": m.get("refs_added"), "unsupported": m.get("unsupported")})
+    return out
+
+
+def suggestions_view(sp):
+    out = []
     for r in reversed(suggestions_of(sp)[-15:]):
         can_undo = False
         if r["status"] in ("accepted", "partial"):
@@ -5405,24 +5466,49 @@ def status(sp):
                 can_undo = sha(resolve_target(sp, r["target"])[0].read_bytes()) == r["after_sha"]
             except Exception:
                 pass
-        sugs.append({"id": r["id"], "created": r["created"], "label": r["label"], "subject": r["target"]["subject"],
-                     "type": r["target"]["type"], "text": r["text"][:240], "status": r["status"],
-                     "reason": r.get("reason"), "summary": r.get("summary"), "can_undo": can_undo,
-                     "share": share_status(sp, r)})
-    is_admin = sp.uid in admin_uids()
-    cs = sp.claude_status()
+        out.append({"id": r["id"], "created": r["created"], "label": r["label"], "subject": r["target"]["subject"],
+                    "type": r["target"]["type"], "text": r["text"][:240], "status": r["status"],
+                    "reason": r.get("reason"), "summary": r.get("summary"), "can_undo": can_undo,
+                    "share": share_status(sp, r)})
+    return out
+
+
+def engine_view(sp, prof):
     key, model = sp.or_key(), sp.or_model()
     mi = or_model_info(model, fetch=False) if model else None     # cached list only: this runs every 5 s
-    engine = {"name": sp.engine(), "ready": sp.engine_ok(),
-              "openrouter": {"hasKey": bool(key), "hint": ("…" + key[-4:]) if key else None, "model": model,
-                             "vision": None if mi is None else mi["vision"], "auto": or_auto_status(sp) if model == OR_AUTO else None},
-              "claude": {"model": prof.get("claude_model") if prof.get("claude_model") in CLAUDE_MODELS else "",
-                         "effort": sp.claude_effort() or "", "default_model": MODEL,
-                         "models": CLAUDE_MODELS, "efforts": CLAUDE_EFFORTS}}
+    return {"name": sp.engine(), "ready": sp.engine_ok(),
+            "openrouter": {"hasKey": bool(key), "hint": ("…" + key[-4:]) if key else None, "model": model,
+                           "vision": None if mi is None else mi["vision"], "auto": or_auto_status(sp) if model == OR_AUTO else None},
+            "claude": {"model": prof.get("claude_model") if prof.get("claude_model") in CLAUDE_MODELS else "",
+                       "effort": sp.claude_effort() or "", "default_model": MODEL,
+                       "models": CLAUDE_MODELS, "efforts": CLAUDE_EFFORTS}}
+
+
+def status(sp):
+    st = read_json(STATUS, {}) or {}
+    prof = read_json(sp.profile, {}) or {}
+    worker_view = {"state": st.get("state", "idle"), "last_run": st.get("last_run"),
+                   "current": st.get("current") if st.get("current_uid") == sp.uid else
+                   (L("обробляє чергу іншої людини", "processing another person's queue") if st.get("state") == "busy" else None)}
+    # what is happening to each book right now: Claude reading/writing, the PDFs being built, or waiting
+    busy_here = worker_busy_for(sp)
+    dirty = set(read_json(sp.dirty, []) or [])
+    waiting, auto_waiting, making = waiting_work(sp, st, prof, busy_here)
+    cur_subj, cur_phase = st.get("current_subject"), st.get("current_phase")
+    auto_activity = ("ingest" if busy_here and cur_phase == "ingest" and not cur_subj else
+                     "queued" if auto_waiting else None)
+    subjects = []
+    for s in sp.load_syllabus()["subjects"]:
+        activity = (cur_phase if busy_here and cur_subj == s["id"] else
+                    "build" if s["id"] in dirty or (busy_here and s["id"] in (st.get("build_pending") or []))
+                    else "queued" if s["id"] in waiting else None)
+        subjects.append(subject_view(sp, s, activity, making.get(s["id"], [])))
+    is_admin = sp.uid in admin_uids()
+    cs = sp.claude_status()
     return {"ok": True, "user": {"uid": sp.uid, "login": prof.get("login"), "name": prof.get("name")},
-            "is_admin": is_admin, "engine": engine,
+            "is_admin": is_admin, "engine": engine_view(sp, prof),
             "admin_pending": sum(c["status"] == "proposed" for c in contributions()) if is_admin else 0,
-            "suggestions": sugs, "suggest_limits": suggest_limits(sp),
+            "suggestions": suggestions_view(sp), "suggest_limits": suggest_limits(sp),
             "usage": usage_view(sp), "limit_gate": sp.limit_gate(),
             "exam_limits": {"max_tickets": EXAM_MAX_TICKETS, "max_per": EXAM_MAX_PER, "wish_max": EXAM_WISH_MAX},
             "claude": {"loggedIn": cs.get("loggedIn"), "email": cs.get("email"),
@@ -5433,7 +5519,7 @@ def status(sp):
                               (read_json(sp.root / "digest_failures.json", {}) or {}).items()
                               if v.get("attempts", 0) >= MAX_ATTEMPTS],
             "subjects": subjects, "auto_activity": auto_activity,
-            "queue": queue, "failed": failed, "recent": recent,
+            "queue": queue_view(sp, st, prof, busy_here), "failed": failed_view(sp), "recent": recent_view(sp),
             "general_refs": _refs_list(sp.d["refs"], "general") + _refs_list(REFS_OPEN, "general")}
 
 
