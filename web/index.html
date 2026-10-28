@@ -108,14 +108,10 @@ ul.list li.ipg { align-items: center; padding: 12px 0; }
    --gl1 / --gl2: light and dark colour of the glass (r, g, b); --c0..--c3: its base from dark to bright. */
 :root { --gl1: 255,255,255; --gl2: 0,0,0; --c0: #181818; --c1: #444; --c2: #8c8c8c; --c3: #f6f6f6; --band: #050505; --bt: #fff; }
 :root[data-theme="light"] { --gl1: 0,0,0; --gl2: 255,255,255; --c0: #e8e8e8; --c1: #b9b9b9; --c2: #727272; --c3: #0b0b0b; --band: #f8f8f5; --bt: #0b0b0b; }
-/* the shape: one pill at least 34 px high, corners of 17 px (title up to two lines, then the "change" end of the same glass); drawn as a mask of gradients on the
+/* the shape: one rectangle at least 34 px high, square corners (title up to two lines, then the "change" end of the same glass); drawn as a mask of gradients on the
    texture, so title and end share it without a seam */
 .gbtn { --p0: 0px; --r: 1; --b0: 85%; --dir: 90deg; --b: var(--b0); --q: var(--b0); --p: var(--p0);
-  --shape-img: linear-gradient(#000, #000), linear-gradient(#000, #000), linear-gradient(#000, #000),
-    radial-gradient(circle at 100% 100%, #000 16.5px, transparent 17.5px), radial-gradient(circle at 0 100%, #000 16.5px, transparent 17.5px),
-    radial-gradient(circle at 100% 0, #000 16.5px, transparent 17.5px), radial-gradient(circle at 0 0, #000 16.5px, transparent 17.5px);
-  --shape-size: calc(100% - 30px) 100%, 17px calc(100% - 30px), 17px calc(100% - 30px), 17px 17px, 17px 17px, 17px 17px, 17px 17px;   /* the parts overlap by 2 px: no hairline seams */
-  --shape-pos: 15px 0, 0 15px, 100% 15px, 0 0, 100% 0, 0 100%, 100% 100%;
+  --shape-img: linear-gradient(#000, #000); --shape-size: 100% 100%; --shape-pos: 0 0;
   position: relative; display: inline-flex; align-items: center; flex: 0 1 auto; max-width: 100%; min-height: 34px;
   isolation: isolate; color: var(--bt); font: 600 14px var(--sans); }
 .gbtn::before {
@@ -132,7 +128,7 @@ ul.list li.ipg { align-items: center; padding: 12px 0; }
   -webkit-mask-image: var(--shape-img); mask-image: var(--shape-img); -webkit-mask-size: var(--shape-size); mask-size: var(--shape-size);
   -webkit-mask-position: var(--shape-pos); mask-position: var(--shape-pos); -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; }
 /* a thin outline along the edge: no glass texture, a plain line that is lit where the light zones of the glass are (--b, --q) */
-.gring { position: absolute; inset: 0; z-index: 1; pointer-events: none; border-radius: 17px; padding: 1.5px;
+.gring { position: absolute; inset: 0; z-index: 1; pointer-events: none; border-radius: 0; padding: 1.5px;
   background:
     linear-gradient(90deg, rgba(var(--gl1), 0) calc(var(--b) - 22%), rgba(var(--gl1), 1) var(--b), rgba(var(--gl1), 0) calc(var(--b) + 22%)),
     linear-gradient(90deg, rgba(var(--gl1), 0) calc(var(--q) - 18%), rgba(var(--gl1), .6) var(--q), rgba(var(--gl1), 0) calc(var(--q) + 18%)),
@@ -146,7 +142,7 @@ ul.list li.ipg { align-items: center; padding: 12px 0; }
     linear-gradient(112deg, rgba(var(--gl1), 0) 28%, rgba(var(--gl1), .26) 40%, rgba(var(--gl1), 0) 52%),
     linear-gradient(0deg, rgba(var(--gl1), .22), rgba(var(--gl1), 0) 16%); }
 a.glass > span, .gedit > span { position: relative; z-index: 1; isolation: isolate; display: block; padding: 2px 16px; }
-a.glass > span::before, .gedit > span::before { content: ""; position: absolute; inset: -4px -7px; z-index: -1; border-radius: 999px; background: var(--band);
+a.glass > span::before, .gedit > span::before { content: ""; position: absolute; inset: -4px -7px; z-index: -1; border-radius: 0; background: var(--band);
   -webkit-mask-image: linear-gradient(90deg, transparent, #000 24px, #000 calc(100% - 24px), transparent), linear-gradient(180deg, transparent, #000 40%, #000 60%, transparent);
   -webkit-mask-composite: source-in;
   mask-image: linear-gradient(90deg, transparent, #000 24px, #000 calc(100% - 24px), transparent), linear-gradient(180deg, transparent, #000 40%, #000 60%, transparent);
@@ -165,7 +161,7 @@ a.glass > span > i { display: -webkit-box; -webkit-box-orient: vertical; -webkit
   color: var(--bt); cursor: pointer; font: 600 12px var(--sans); }
 .gedit > span { padding: 1px 14px; }
 .gedit:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
-.gbtn > a:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; border-radius: 12px; }
+.gbtn > a:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 [hidden] { display: none !important; }   /* .btn sets display, which would show a hidden button */
 .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 0; overflow: hidden; }
 .seg label { padding: 6px 12px; cursor: pointer; font-size: 14px; color: var(--muted); }
