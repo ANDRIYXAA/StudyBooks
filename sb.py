@@ -5151,9 +5151,21 @@ def supervise(force=False):
     if not force and time.time() - float(st.get("last_ts") or 0) < SV_EVERY:
         return {"ok": True, "skipped": True}
     st["last_ts"], st["last"], st["_new"] = time.time(), now_iso(), []
-    checks = {}
+    checks = {"worker": check_worker(st)}
+    checks["people"] = [check_person(st, sp, checks["worker"]) for sp in spaces()]
+    checks.update(check_disk(st), sites=check_sites(st))
+    ls = learn_state()                                  # the skill and its learning
+    checks["skill"] = {"chars": len(skill_text()), "last_learn": ls.get("last_at"), "auto": ls["auto"],
+                       "last_error": ls.get("last_error")}
+    st["checks"] = checks
+    new = st.pop("_new", [])
+    write_json(SUPERVISOR, st)
+    sv_notify(new)
+    return {"ok": True, "events": len(new), "checks": checks}
 
-    # 1. the worker: gone without cleaning up, or alive without a heartbeat for an hour
+
+def check_worker(st):
+    """The worker: gone without cleaning up, or alive without a heartbeat for an hour. -> reset | killed | busy | idle"""
     ws = read_json(STATUS, {}) or {}
     pid = ws.get("pid")
     alive = bool(pid and "sb.py" in _proc_cmd(pid))
@@ -5162,98 +5174,119 @@ def supervise(force=False):
                    current_phase=None, build_pending=[], **clear_progress())
         sv_event(st, "act", "worker_dead", "Обробник зник посеред роботи. Стан скинуто, черга піде далі з того місця, де зупинилась.",
                  "The worker vanished mid-run. Its state was reset; the queue goes on from where it stopped.", dedupe=600)
-        checks["worker"] = "reset"
-    elif ws.get("state") == "busy":
-        beat = ws.get("beat") or ws.get("current_since")
-        age = time.time() - _ts(beat) if beat else 0
-        if age > SV_HUNG:
-            _kill_tree(pid)
-            sv_event(st, "act", "worker_hung", f"Обробник {int(age // 60)} хв не подавав ознак життя, його зупинено. "
-                     "Порція, що оброблялась, продовжиться з того, що вже зроблено.",
-                     f"The worker showed no sign of life for {int(age // 60)} min and was stopped. "
-                     "The chunk it was on goes on from what is already done.", dedupe=600)
-            checks["worker"] = "killed"
-        else:
-            checks["worker"] = "busy"
-    else:
-        checks["worker"] = "idle"
+        return "reset"
+    if ws.get("state") != "busy":
+        return "idle"
+    beat = ws.get("beat") or ws.get("current_since")
+    age = time.time() - _ts(beat) if beat else 0
+    if age <= SV_HUNG:
+        return "busy"
+    _kill_tree(pid)
+    sv_event(st, "act", "worker_hung", f"Обробник {int(age // 60)} хв не подавав ознак життя, його зупинено. "
+             "Порція, що оброблялась, продовжиться з того, що вже зроблено.",
+             f"The worker showed no sign of life for {int(age // 60)} min and was stopped. "
+             "The chunk it was on goes on from what is already done.", dedupe=600)
+    return "killed"
 
-    people = []
-    for sp in spaces():
-        prof, row = sp.prof(), {"who": display_name(sp.uid), "engine": sp.engine()}
-        set_lang(sp.lang())
-        # 2. OpenRouter: did the person pay? (50 -> 1000 free requests a day)
-        if sp.engine() == "openrouter" and sp.or_key():
-            ost = or_state(sp)
-            today = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
-            used = ost.get("used", 0) if ost.get("day") == today else 0
-            was = prof.get("or_paid")
-            or_refresh_tier_safe(sp, force=prof.get("or_daily_cap") == 50 and used > 50)
-            now_paid = sp.prof().get("or_paid")
-            row["or_paid"], row["or_used"], row["or_cap"] = now_paid, used, sp.prof().get("or_daily_cap")
-            if now_paid and not was:
-                if (ost.get("all_until") or 0) > time.time() and used < 1000:
-                    ost.pop("all_until", None)            # parked by the old 50-a-day cap: lift it
-                    write_json(sp.root / "or_state.json", ost)
-                sv_event(st, "act", "or_paid", "На OpenRouter поповнено рахунок: тепер 1000 безкоштовних запитів на добу (було 50). "
-                         "Паузу через добовий ліміт знято.", "OpenRouter credits were bought: 1000 free requests a day now "
-                         "(was 50). The daily-limit pause was lifted.", uid=sp.uid, dedupe=30 * 86400)
-        # 3. a "blocked" note that no longer holds
-        b = prof.get("blocked") or ""
-        if b:
-            age = time.time() - _ts(prof["blocked_at"]) if prof.get("blocked_at") else 1e9
-            if "(403)" in b and sp.engine() == "openrouter" and sp.or_model() == OR_AUTO:
-                set_blocked(sp, None)
-                sv_event(st, "act", "unblock_403", "Знято зупинку через 403 однієї моделі OpenRouter: тепер така модель "
-                         "ставиться на паузу, а обробка йде далі на наступній.", "Lifted a stop caused by one OpenRouter model's "
-                         "403: such a model is now parked and the work goes on with the next one.", uid=sp.uid)
-            elif age > 2 * 3600 and not sp.limit_gate() and sp.engine_ok():
-                set_blocked(sp, None)
-                sv_event(st, "info", "unblock_stale", f"Знято застарілу позначку «{b[:120]}» (понад 2 год).",
-                         f"Cleared a stale note “{b[:120]}” (over 2 h old).", uid=sp.uid)
-        # 4. failed items whose cause was only a limit or an outage: once or twice back into the queue
-        for path in sorted(sp.d["failed"].iterdir()) if sp.d["failed"].exists() else []:
-            mf = path / "submission.json" if path.is_dir() else path
-            m = read_json(mf, {}) or {}
-            err = str(m.get("last_error") or "")
-            fresh = time.time() - path.stat().st_mtime < 3 * 86400
-            if path.is_dir() and time.time() - path.stat().st_mtime > SV_KEEP_FAILED_WORK:
-                shutil.rmtree(sp.d["work"] / path.name, ignore_errors=True)     # kept for "Retry"; nobody came back
-            if err and fresh and SV_TRANSIENT.search(err) and int(m.get("sv_retries") or 0) < SV_MAX_RETRIES:
-                m["sv_retries"] = int(m.get("sv_retries") or 0) + 1
-                write_json(mf, m)
-                retry_failed(sp, path.name)
-                lab = (m.get("label") or m.get("text") or path.name)[:80]
-                sv_event(st, "act", f"retry:{path.name}", f"«{lab}» знову в черзі: невдача була тимчасовою ({err[:120]}).",
-                         f"“{lab}” is back in the queue: the failure was temporary ({err[:120]}).", uid=sp.uid, dedupe=86400)
-        # 5. a queue that does not move
-        pend = [(t, k, p) for t, k, p in pending_items(sp) if k in ("sub", "req")]
-        row["queue"] = len(pend)
-        if pend:
-            oldest = min(t for t, _, _ in pend if t) if any(t for t, _, _ in pend) else None
-            age = time.time() - _ts(oldest) if oldest else 0
-            if not sp.engine_ok():
-                sv_event(st, "warn", "no_engine", f"У черзі {len(pend)}, але двигун не готовий ({sp.engine_missing()}).",
-                         f"{len(pend)} waiting, but the engine is not ready ({sp.engine_missing()}).", uid=sp.uid, dedupe=86400)
-            elif age > 6 * 3600 and not sp.paused() and not sp.limit_gate() and not sp.prof().get("blocked") \
-                    and checks["worker"] == "idle":
-                sv_event(st, "warn", "queue_stuck", f"Найстаріше в черзі чекає {int(age // 3600)} год, а обробник стоїть.",
-                         f"The oldest item has waited {int(age // 3600)} h while the worker is idle.", uid=sp.uid, dedupe=6 * 3600)
-        if prof.get("build_errors"):
-            e0 = prof["build_errors"][0]
-            sv_event(st, "warn", f"build:{e0.get('subject')}", f"Книга {e0.get('subject')}/{e0.get('edition')} не збирається: "
-                     f"{str(e0.get('error'))[-160:]}", f"The book {e0.get('subject')}/{e0.get('edition')} does not build: "
-                     f"{str(e0.get('error'))[-160:]}", uid=sp.uid, dedupe=86400)
-        row["paused"], row["blocked"] = bool(sp.prof().get("paused")), sp.prof().get("blocked")
-        people.append(row)
-    checks["people"] = people
 
-    # 6. disk and the two sites
+def check_person(st, sp, worker_state):
+    """Everything the supervisor looks at for one person: -> the row shown in the checks."""
+    prof, row = sp.prof(), {"who": display_name(sp.uid), "engine": sp.engine()}
+    set_lang(sp.lang())
+    if sp.engine() == "openrouter" and sp.or_key():
+        check_openrouter_paid(st, sp, prof, row)
+    clear_stale_block(st, sp, prof)
+    requeue_transient_failures(st, sp)
+    check_queue_moves(st, sp, row, worker_state)
+    if prof.get("build_errors"):
+        e0 = prof["build_errors"][0]
+        sv_event(st, "warn", f"build:{e0.get('subject')}", f"Книга {e0.get('subject')}/{e0.get('edition')} не збирається: "
+                 f"{str(e0.get('error'))[-160:]}", f"The book {e0.get('subject')}/{e0.get('edition')} does not build: "
+                 f"{str(e0.get('error'))[-160:]}", uid=sp.uid, dedupe=86400)
+    row["paused"], row["blocked"] = bool(sp.prof().get("paused")), sp.prof().get("blocked")
+    return row
+
+
+def check_openrouter_paid(st, sp, prof, row):
+    """OpenRouter: did the person pay? (50 -> 1000 free requests a day)"""
+    ost = or_state(sp)
+    today = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
+    used = ost.get("used", 0) if ost.get("day") == today else 0
+    was = prof.get("or_paid")
+    or_refresh_tier_safe(sp, force=prof.get("or_daily_cap") == 50 and used > 50)
+    now_paid = sp.prof().get("or_paid")
+    row["or_paid"], row["or_used"], row["or_cap"] = now_paid, used, sp.prof().get("or_daily_cap")
+    if now_paid and not was:
+        if (ost.get("all_until") or 0) > time.time() and used < 1000:
+            ost.pop("all_until", None)            # parked by the old 50-a-day cap: lift it
+            write_json(sp.root / "or_state.json", ost)
+        sv_event(st, "act", "or_paid", "На OpenRouter поповнено рахунок: тепер 1000 безкоштовних запитів на добу (було 50). "
+                 "Паузу через добовий ліміт знято.", "OpenRouter credits were bought: 1000 free requests a day now "
+                 "(was 50). The daily-limit pause was lifted.", uid=sp.uid, dedupe=30 * 86400)
+
+
+def clear_stale_block(st, sp, prof):
+    """A "blocked" note that no longer holds."""
+    note = prof.get("blocked") or ""
+    if not note:
+        return
+    age = time.time() - _ts(prof["blocked_at"]) if prof.get("blocked_at") else 1e9
+    if "(403)" in note and sp.engine() == "openrouter" and sp.or_model() == OR_AUTO:
+        set_blocked(sp, None)
+        sv_event(st, "act", "unblock_403", "Знято зупинку через 403 однієї моделі OpenRouter: тепер така модель "
+                 "ставиться на паузу, а обробка йде далі на наступній.", "Lifted a stop caused by one OpenRouter model's "
+                 "403: such a model is now parked and the work goes on with the next one.", uid=sp.uid)
+    elif age > 2 * 3600 and not sp.limit_gate() and sp.engine_ok():
+        set_blocked(sp, None)
+        sv_event(st, "info", "unblock_stale", f"Знято застарілу позначку «{note[:120]}» (понад 2 год).",
+                 f"Cleared a stale note “{note[:120]}” (over 2 h old).", uid=sp.uid)
+
+
+def requeue_transient_failures(st, sp):
+    """Failed items whose cause was only a limit or an outage go back into the queue, once or twice."""
+    for path in sorted(sp.d["failed"].iterdir()) if sp.d["failed"].exists() else []:
+        mf = path / "submission.json" if path.is_dir() else path
+        m = read_json(mf, {}) or {}
+        err = str(m.get("last_error") or "")
+        fresh = time.time() - path.stat().st_mtime < 3 * 86400
+        if path.is_dir() and time.time() - path.stat().st_mtime > SV_KEEP_FAILED_WORK:
+            shutil.rmtree(sp.d["work"] / path.name, ignore_errors=True)     # kept for "Retry"; nobody came back
+        if err and fresh and SV_TRANSIENT.search(err) and int(m.get("sv_retries") or 0) < SV_MAX_RETRIES:
+            m["sv_retries"] = int(m.get("sv_retries") or 0) + 1
+            write_json(mf, m)
+            retry_failed(sp, path.name)
+            lab = (m.get("label") or m.get("text") or path.name)[:80]
+            sv_event(st, "act", f"retry:{path.name}", f"«{lab}» знову в черзі: невдача була тимчасовою ({err[:120]}).",
+                     f"“{lab}” is back in the queue: the failure was temporary ({err[:120]}).", uid=sp.uid, dedupe=86400)
+
+
+def check_queue_moves(st, sp, row, worker_state):
+    """A queue that does not move: no engine, or the oldest item waits for hours while the worker is idle."""
+    pend = [(t, k, p) for t, k, p in pending_items(sp) if k in ("sub", "req")]
+    row["queue"] = len(pend)
+    if not pend:
+        return
+    oldest = min(t for t, _, _ in pend if t) if any(t for t, _, _ in pend) else None
+    age = time.time() - _ts(oldest) if oldest else 0
+    if not sp.engine_ok():
+        sv_event(st, "warn", "no_engine", f"У черзі {len(pend)}, але двигун не готовий ({sp.engine_missing()}).",
+                 f"{len(pend)} waiting, but the engine is not ready ({sp.engine_missing()}).", uid=sp.uid, dedupe=86400)
+    elif age > 6 * 3600 and not sp.paused() and not sp.limit_gate() and not sp.prof().get("blocked") \
+            and worker_state == "idle":
+        sv_event(st, "warn", "queue_stuck", f"Найстаріше в черзі чекає {int(age // 3600)} год, а обробник стоїть.",
+                 f"The oldest item has waited {int(age // 3600)} h while the worker is idle.", uid=sp.uid, dedupe=6 * 3600)
+
+
+def check_disk(st):
     free = shutil.disk_usage(DATA).free
-    checks["disk_free_gb"] = round(free / 1024 ** 3, 1)
     if free < 10 * 1024 ** 3:
         sv_event(st, "warn", "disk", f"На диску лишилось {free / 1024 ** 3:.1f} ГБ.", f"Only {free / 1024 ** 3:.1f} GB left on the disk.",
                  dedupe=86400)
+    return {"disk_free_gb": round(free / 1024 ** 3, 1)}
+
+
+def check_sites(st):
+    """Do the two sites answer? -> {port: bool}"""
     sites = {}
     for port in SV_PORTS:
         try:
@@ -5264,17 +5297,7 @@ def supervise(force=False):
         if not sites[port]:
             sv_event(st, "warn", f"site:{port}", f"Сайт на порту {port} не відповідає.", f"The site on port {port} does not answer.",
                      dedupe=3 * 3600)
-    checks["sites"] = sites
-
-    # 7. the skill and its learning
-    ls = learn_state()
-    checks["skill"] = {"chars": len(skill_text()), "last_learn": ls.get("last_at"), "auto": ls["auto"],
-                       "last_error": ls.get("last_error")}
-    st["checks"] = checks
-    new = st.pop("_new", [])
-    write_json(SUPERVISOR, st)
-    sv_notify(new)
-    return {"ok": True, "events": len(new), "checks": checks}
+    return sites
 
 
 def supervisor_view():
