@@ -1,0 +1,2262 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Study books</title>
+<script>try { if (localStorage.getItem("theme") === "light") document.documentElement.dataset.theme = "light"; } catch (e) {}</script>
+<style>
+/* Dark editorial poster look (the person's references: grain, halftone, soft blurred light, bold + light type).
+   Every effect is a static background drawn once: no filters, no blur(), no animation except the small spinner. */
+:root {
+  color-scheme: dark;
+  --bg: #0b0b0b; --panel: rgba(20,20,20,.68); --ink: #ececea; --muted: #a3a3a0; --line: #2e2e2e; --hair: #222222;
+  --accent: #ececea; --accent-ink: #0b0b0b; --accent-soft: #1b1b1b; --ok: #62d394; --warn: #e3aa55; --bad: #ff6f62;
+  --bg0: #101010; --pillbg: rgba(11,11,11,.7); --dlg: #141414; --dot: rgba(236,236,234,.10); --line2: #4a4a4a;
+  --ph: #8a8a87; --ul: #6a6a6a; --shade: rgba(0,0,0,.7);
+  --radius: 0;
+  --sans: "Helvetica Neue", "Segoe UI", Roboto, "Noto Sans", Arial, system-ui, sans-serif;   /* Segoe/Roboto have a real light weight, Arial has not */
+  --mono: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+/* light theme: the same layout, paper-white page; the poster stays a printed poster in both */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f1f0ec; --panel: rgba(255,255,255,.72); --ink: #161616; --muted: #5f5f5b; --line: #cdcbc4; --hair: #e0ded8;
+  --accent: #161616; --accent-ink: #f1f0ec; --accent-soft: #e6e4de; --ok: #17744a; --warn: #8f5a00; --bad: #c1291a;
+  --bg0: #ecebe6; --pillbg: rgba(255,255,255,.7); --dlg: #fbfaf7; --dot: rgba(22,22,22,.10); --line2: #a9a7a0;
+  --ph: #85857f; --ul: #8f8d86; --shade: rgba(0,0,0,.45);
+}
+* { box-sizing: border-box; }
+html { overflow-x: clip; background: var(--bg); }
+/* the page background is #bg: one canvas drawn once for the screen (see paintTextures), fixed behind everything,
+   so there is no tile to repeat and scrolling never repaints it */
+body { margin: 0; background: transparent; color: var(--ink); font: 15px/1.55 var(--sans); }
+#bg { position: fixed; left: 0; top: 0; width: 100vw; height: 100vh; height: 100lvh; z-index: -1; pointer-events: none; background: var(--bg0); }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* ---- header: a poster (the person's reference): grey paper, inked squares, the short name knocked out of them
+   in big letters cut by the square edges, a small text column. Paper and ink are canvases drawn once (paintTextures). ---- */
+header { max-width: 980px; margin: 0 auto; padding: 22px 16px 16px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.poster { position: relative; flex: 1 1 100%; margin-bottom: 8px; padding: clamp(14px, 3.2vw, 34px); color: #161616; background: #b9bcbf; }
+.poster > canvas { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
+.pgrid { position: relative; }
+.pgrid { --cs: min(158px, calc((100vw - 32px - 2 * clamp(14px, 3.2vw, 34px) - 12px) / 4));
+  display: grid; grid-template-columns: repeat(4, var(--cs)); grid-auto-rows: var(--cs); gap: 3px; }
+.cell { position: relative; overflow: hidden; box-shadow: inset 0 0 0 1px rgba(0,0,0,.55); }
+.cell.part { box-shadow: none; }
+.cell canvas { position: absolute; left: 0; width: 100%; top: var(--cut, 0%); height: calc(100% - var(--cut, 0%)); background: #1d1d1d; }
+.cell b { position: absolute; left: var(--x, 0); top: var(--y, 0); font: 900 calc(var(--cs) * 1.32)/.78 "Arial Black", "Segoe UI Black", "Helvetica Neue", Arial, sans-serif;
+  color: #b9bcbf; letter-spacing: 0; }
+.pnote { align-self: end; justify-self: start; width: min(300px, 46vw); font: 11px/1.35 var(--sans); color: #1e1e1e; display: grid; grid-template-columns: 1fr 1.4fr; gap: 12px; padding: 0 0 2px 8px; }
+.pnote p { margin: 0; }
+.pnote .pfull { font-weight: 600; }
+@media (max-width: 560px) { .pnote { width: auto; grid-template-columns: 1fr; font-size: 9.5px; gap: 4px; } }
+
+.pill { font: 11px var(--mono); letter-spacing: .05em; text-transform: uppercase; padding: 3px 9px; border-radius: 0;
+  border: 1px solid var(--line); color: var(--muted); background: var(--pillbg); }
+.pill.busy { color: var(--ink); border-color: var(--ink); }
+.pill.bad { color: var(--bad); border-color: var(--bad); }
+.pill.ok { color: var(--ok); border-color: var(--ok); }
+nav { max-width: 980px; margin: 0 auto; padding: 0 16px; display: flex; gap: 22px; border-bottom: 1px solid var(--line);
+  overflow-x: auto; scrollbar-width: none; }
+nav button { flex: none; background: none; border: 0; font: 400 16px var(--sans); text-transform: lowercase; color: var(--muted);
+  padding: 12px 0; margin-bottom: -1px; border-bottom: 2px solid transparent; cursor: pointer; }
+nav button:hover { color: var(--ink); }
+nav button.on { color: var(--ink); font-weight: 700; border-bottom-color: var(--ink); }
+main { max-width: 980px; margin: 0 auto; padding: 22px 16px 70px; }
+section.tab { display: none; } section.tab.on { display: block; }
+
+/* ---- surfaces ---- */
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; margin-bottom: 14px; }
+.drop { border: 1px dashed var(--line2); border-radius: var(--radius); padding: 30px 16px; text-align: center; cursor: pointer;
+  background: radial-gradient(circle, var(--dot) 0 1px, transparent 1.5px) 0 0 / 6px 6px, var(--bg); }
+.drop.over { border-style: solid; border-color: var(--ink); background-color: var(--accent-soft); }
+.drop strong { display: block; font: 700 19px var(--sans); letter-spacing: -.02em; margin-bottom: 4px; }
+.drop span { color: var(--muted); font-size: 13px; }
+.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.btn { font: 600 14px var(--sans); border: 1px solid var(--ink); background: transparent; color: var(--ink);
+  padding: 7px 14px; border-radius: 0; cursor: pointer; text-decoration: none; display: inline-block; }
+.btn:hover { background: var(--ink); color: var(--bg); }
+.btn:active { transform: translateY(1px); }
+.btn.primary { background: var(--ink); color: var(--bg); }
+.btn.primary:hover { background: transparent; color: var(--ink); }
+.btn.small { padding: 3px 10px; font-size: 13px; }
+.btn:disabled { opacity: .45; cursor: default; }
+.btn:focus-visible, select:focus-visible, textarea:focus-visible, input:focus-visible, summary:focus-visible, nav button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+label.f { display: block; font: 12px var(--mono); letter-spacing: .02em; color: var(--muted); margin: 14px 0 5px; }
+select, textarea, input[type=text], input[type=password], input[type=date] { width: 100%; font: inherit; color: var(--ink); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 0; padding: 8px 10px; }
+select:hover, textarea:hover, input:hover { border-color: var(--line2); }
+textarea { min-height: 64px; resize: vertical; }
+::placeholder { color: var(--ph); opacity: 1; }
+input[type=date] { width: auto; min-width: 11em; }
+.list input[type=date] { padding: 3px 8px; font-size: 13px; flex: none; }
+.day { margin-top: 10px; } .day > strong { font-size: 14px; }
+/* interactive page button: fake refraction of a glass lens, drawn with static gradients and shadows only (no filter):
+   a bright rim that bends round the edge, a highlight on top, red/blue fringes at the sides of the edge and of the text */
+ul.list li.ipg { align-items: center; padding: 12px 0; }
+.ipg .ipt { flex: 1 1 0; min-width: 8em; }
+.ipg .ipb { flex: none; display: inline-flex; gap: 6px; }
+.ipe { flex: 1 0 100%; }
+.ipe textarea { min-height: 76px; }
+.ipe .row { margin-top: 8px; }
+.gbtn > a:not(.btn) { text-decoration: none; color: var(--bt); }
+/* the button is a pill of reeded glass seen from the side: thin horizontal ribs of uneven width, fine grain, a bright
+   side and a dark side, a lit rim, a glare. Each button gets its own --p (rib phase), --r (rib size), --b (where it is
+   brightest) and --dir (which side), set from its name, so no two look the same. Across the middle a black band with
+   blurred edges carries the text; the light theme is the same picture with the colours inverted.
+   --gl1 / --gl2: light and dark colour of the glass (r, g, b); --c0..--c3: its base from dark to bright. */
+:root { --gl1: 255,255,255; --gl2: 0,0,0; --c0: #181818; --c1: #444; --c2: #8c8c8c; --c3: #f6f6f6; --band: #050505; --bt: #fff; }
+:root[data-theme="light"] { --gl1: 0,0,0; --gl2: 255,255,255; --c0: #e8e8e8; --c1: #b9b9b9; --c2: #727272; --c3: #0b0b0b; --band: #f8f8f5; --bt: #0b0b0b; }
+/* the shape: one pill at least 44 px high, corners of 22 px (title up to two lines, then the "change" end of the same glass); drawn as a mask of gradients on the
+   texture, so title and end share it without a seam */
+.gbtn { --p0: 0px; --r: 1; --b0: 85%; --dir: 90deg; --b: var(--b0); --q: var(--b0); --p: var(--p0);
+  --shape-img: linear-gradient(#000, #000), linear-gradient(#000, #000), linear-gradient(#000, #000),
+    radial-gradient(circle at 100% 100%, #000 21.5px, transparent 22.5px), radial-gradient(circle at 0 100%, #000 21.5px, transparent 22.5px),
+    radial-gradient(circle at 100% 0, #000 21.5px, transparent 22.5px), radial-gradient(circle at 0 0, #000 21.5px, transparent 22.5px);
+  --shape-size: calc(100% - 40px) 100%, 22px calc(100% - 40px), 22px calc(100% - 40px), 22px 22px, 22px 22px, 22px 22px, 22px 22px;   /* the parts overlap by 2 px: no hairline seams */
+  --shape-pos: 20px 0, 0 20px, 100% 20px, 0 0, 100% 0, 0 100%, 100% 100%;
+  position: relative; display: inline-flex; align-items: center; flex: 0 1 auto; max-width: 100%; min-height: 44px;
+  isolation: isolate; color: var(--bt); font: 600 14px var(--sans); }
+.gbtn::before {
+  content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+  background:
+    radial-gradient(circle, rgba(var(--gl1), .22) 0 .55px, transparent .85px) 0 0 / 2.6px 2.6px,
+    repeating-linear-gradient(180deg, rgba(var(--gl1), .6) 0, rgba(var(--gl1), .08) calc(var(--r) * 1.2px), rgba(var(--gl2), .5) calc(var(--r) * 3px),
+      rgba(var(--gl2), 0) calc(var(--r) * 4.4px), rgba(var(--gl1), .2) calc(var(--r) * 5.5px)) 0 var(--p),
+    repeating-linear-gradient(180deg, rgba(var(--gl2), 0) 0, rgba(var(--gl1), .45) calc(var(--r) * 2.4px), rgba(var(--gl2), .6) calc(var(--r) * 4.6px),
+      rgba(var(--gl2), 0) calc(var(--r) * 7.3px), rgba(var(--gl1), .1) calc(var(--r) * 9px)) 0 calc(var(--p) * -1.3),
+    linear-gradient(90deg, rgba(var(--gl1), 0) calc(var(--q) - 24%), rgba(var(--gl1), .3) var(--q), rgba(var(--gl1), 0) calc(var(--q) + 24%)),
+    linear-gradient(90deg, var(--c0) calc(var(--b) - 55%), var(--c1) calc(var(--b) - 28%), var(--c2) calc(var(--b) - 12%), var(--c3) var(--b),
+      var(--c2) calc(var(--b) + 12%), var(--c1) calc(var(--b) + 28%), var(--c0) calc(var(--b) + 55%));
+  -webkit-mask-image: var(--shape-img); mask-image: var(--shape-img); -webkit-mask-size: var(--shape-size); mask-size: var(--shape-size);
+  -webkit-mask-position: var(--shape-pos); mask-position: var(--shape-pos); -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; }
+/* a thin outline along the edge: no glass texture, a plain line that is lit where the light zones of the glass are (--b, --q) */
+.gring { position: absolute; inset: 0; z-index: 1; pointer-events: none; border-radius: 22px; padding: 1.5px;
+  background:
+    linear-gradient(90deg, rgba(var(--gl1), 0) calc(var(--b) - 22%), rgba(var(--gl1), 1) var(--b), rgba(var(--gl1), 0) calc(var(--b) + 22%)),
+    linear-gradient(90deg, rgba(var(--gl1), 0) calc(var(--q) - 18%), rgba(var(--gl1), .6) var(--q), rgba(var(--gl1), 0) calc(var(--q) + 18%)),
+    rgba(var(--gl1), .16);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0); }
+.gbtn::after { content: ""; position: absolute; inset: 0; z-index: 0; pointer-events: none;
+  -webkit-mask-image: var(--shape-img); mask-image: var(--shape-img); -webkit-mask-size: var(--shape-size); mask-size: var(--shape-size);
+  -webkit-mask-position: var(--shape-pos); mask-position: var(--shape-pos); -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+  background: linear-gradient(180deg, rgba(var(--gl1), .5), rgba(var(--gl1), 0) 22%),
+    linear-gradient(112deg, rgba(var(--gl1), 0) 28%, rgba(var(--gl1), .26) 40%, rgba(var(--gl1), 0) 52%),
+    linear-gradient(0deg, rgba(var(--gl1), .22), rgba(var(--gl1), 0) 16%); }
+a.glass > span, .gedit > span { position: relative; z-index: 1; isolation: isolate; display: block; padding: 3px 18px; }
+a.glass > span::before, .gedit > span::before { content: ""; position: absolute; inset: -5px -8px; z-index: -1; border-radius: 999px; background: var(--band);
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 24px, #000 calc(100% - 24px), transparent), linear-gradient(180deg, transparent, #000 40%, #000 60%, transparent);
+  -webkit-mask-composite: source-in;
+  mask-image: linear-gradient(90deg, transparent, #000 24px, #000 calc(100% - 24px), transparent), linear-gradient(180deg, transparent, #000 40%, #000 60%, transparent);
+  mask-composite: intersect; }
+/* hover: the light zone of the texture itself flows out to the sides and back (a second, weaker band goes the other way) and
+   the ribs creep up (the three numbers are registered so the browser can animate them) */
+@property --b { syntax: "<percentage>"; inherits: true; initial-value: 85%; }
+@property --q { syntax: "<percentage>"; inherits: true; initial-value: 30%; }
+@property --p { syntax: "<length>"; inherits: true; initial-value: 0px; }
+/* the movement itself is driven from the script below (glassIn / glassOut): the same loop, but it is never cut: on leaving it
+   runs on to its end (where the glass is at rest) a little faster, and a quick in-and-out never jumps */
+a.glass { display: flex; align-items: center; justify-content: center; flex: 1 1 auto; min-width: 0; min-height: 44px; padding: 9px 8px 9px 22px; }
+a.glass > span { min-width: 0; max-width: 100%; }
+a.glass > span > i { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; font-style: normal; overflow: hidden; line-height: 1.3; text-align: center; overflow-wrap: anywhere; }
+.gedit { position: relative; z-index: 1; display: flex; align-items: center; justify-content: center; flex: none; align-self: stretch; margin: 0; padding: 0 18px 0 4px; border: 0; background: none;
+  color: var(--bt); cursor: pointer; font: 600 12px var(--sans); }
+.gedit > span { padding: 2px 16px; }
+.gedit:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.gbtn > a:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; border-radius: 12px; }
+[hidden] { display: none !important; }   /* .btn sets display, which would show a hidden button */
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 0; overflow: hidden; }
+.seg label { padding: 6px 12px; cursor: pointer; font-size: 14px; color: var(--muted); }
+.seg input { display: none; }
+.seg label:has(input:checked) { background: var(--ink); color: var(--bg); font-weight: 600; }
+.files { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; margin-top: 12px; }
+.file { position: relative; border: 1px solid var(--line); border-radius: 0; overflow: hidden; background: var(--bg);
+  aspect-ratio: 3/4; display: flex; align-items: center; justify-content: center; font-size: 11px; color: var(--muted);
+  text-align: center; padding: 4px; word-break: break-all; }
+.file img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.file button { position: absolute; top: 3px; right: 3px; width: 22px; height: 22px; border-radius: 0; border: 0;
+  background: #000; color: #fff; cursor: pointer; line-height: 22px; padding: 0; font-size: 14px; }
+.x { background: none; border: 0; padding: 0 3px; margin-left: 1px; color: var(--muted); font: 12px var(--mono); cursor: pointer; }
+.x:hover { color: var(--bad); }
+.x:disabled { opacity: .45; cursor: default; }
+.file .n { position: absolute; left: 3px; top: 3px; background: #000; color: #fff; border-radius: 0; padding: 0 5px; }
+.bar { height: 4px; background: var(--hair); border-radius: 0; overflow: hidden; margin-top: 12px; display: none; }
+.bar i { display: block; height: 100%; width: 0; background: var(--ink); }
+.msg { margin-top: 10px; font-size: 14px; }
+.msg.ok { color: var(--ok); } .msg.bad { color: var(--bad); }
+h2 { font: 300 clamp(24px, 3.6vw, 34px)/1.05 var(--sans); letter-spacing: -.03em; text-transform: lowercase; margin: 34px 0 14px; color: var(--ink); }
+ul.list { list-style: none; margin: 0; padding: 0; }
+ul.list li { padding: 10px 0; border-top: 1px solid var(--hair); font-size: 14px; display: flex; gap: 10px;
+  justify-content: space-between; align-items: baseline; flex-wrap: wrap; }
+ul.list li:first-child { border-top: 0; }
+.muted { color: var(--muted); } .small { font-size: 13px; } .bad { color: var(--bad); } .warn { color: var(--warn); }
+.subj h3 { margin: 0; font: 700 clamp(19px, 2.6vw, 24px)/1.15 var(--sans); letter-spacing: -.025em; }
+.subj .code { color: var(--muted); font: 12px var(--mono); margin-left: 8px; vertical-align: middle; }
+.subj .meta { color: var(--muted); font: 12px var(--mono); margin: 6px 0 14px; }
+.subj details { margin-top: 12px; font-size: 14px; }
+.subj summary { cursor: pointer; color: var(--muted); }
+.subj summary:hover { color: var(--ink); }
+.act { display: inline-flex; align-items: center; gap: 8px; font: 12px var(--mono); color: var(--ink); }
+.act i { flex: none; width: 13px; height: 13px; border-radius: 50%; border: 2px solid var(--line);
+  border-top-color: var(--ink); animation: sbspin .8s linear infinite; }
+.act.wait { color: var(--muted); }
+.act.wait i { border: 0; width: 7px; height: 7px; margin: 3px; background: var(--muted); animation: sbpulse 1.6s ease-in-out infinite; }
+.autoact { margin-bottom: 14px; }
+@keyframes sbspin { to { transform: rotate(360deg); } }
+@keyframes sbpulse { 50% { opacity: .25; } }
+@media (prefers-reduced-motion: reduce) { .act i, .act.wait i { animation: none; } }
+.topics { columns: 2 260px; margin: 8px 0 0; padding-left: 18px; }
+.topics li { break-inside: avoid; } .topics .zero { color: var(--muted); }
+.empty { color: var(--muted); padding: 22px 0; text-align: center; font: italic 300 16px var(--sans); }
+.notice { border: 1px solid var(--line); border-left: 3px solid var(--warn); padding: 10px 12px; background: var(--panel); border-radius: 0; margin-bottom: 12px; font-size: 14px; }
+.grow { flex: 1; }
+dialog { border: 1px solid var(--line); border-radius: 0; background: var(--dlg); color: var(--ink);
+  max-width: 520px; width: calc(100% - 32px); padding: 22px; }
+dialog::backdrop { background: var(--shade); }
+dialog h3 { margin: 0 0 12px; font: 300 26px/1.1 var(--sans); letter-spacing: -.03em; text-transform: lowercase; }
+dialog ol { padding-left: 20px; margin: 8px 0; } dialog li { margin: 6px 0; }
+.dlg-x { position: absolute; right: 12px; top: 12px; margin: 0; }
+dialog { position: relative; }
+code { background: var(--accent-soft); padding: 1px 5px; border-radius: 0; font: 13px var(--mono); }
+.chk { display: flex; gap: 8px; align-items: flex-start; font-size: 14px; cursor: pointer; margin-top: 12px; }
+.chk input { margin-top: 4px; accent-color: var(--ink); }
+.sug { padding: 11px 0; border-top: 1px solid var(--hair); font-size: 14px; }
+.sug:first-child { border-top: 0; }
+.sug .q { white-space: pre-wrap; color: var(--muted); font-size: 13px; margin: 4px 0; font-style: italic; }
+.tag { font: 11px var(--mono); padding: 1px 7px; border-radius: 0; border: 1px solid var(--line); color: var(--muted); margin-left: 6px; }
+.tag.ok { color: var(--ok); border-color: var(--ok); } .tag.bad { color: var(--bad); border-color: var(--bad); }
+.tag.wait { color: var(--ink); border-color: var(--ink); }
+pre.diff { margin: 8px 0; padding: 8px 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 0;
+  font: 12px/1.45 var(--mono); max-height: 280px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
+pre.diff .a { color: var(--ok); } pre.diff .r { color: var(--bad); } pre.diff .h { color: var(--muted); }
+.langsw { display: inline-flex; border: 1px solid var(--line); border-radius: 0; overflow: hidden; }
+.langsw button { background: var(--pillbg); border: 0; color: var(--muted); font: 12px var(--mono); padding: 4px 9px; cursor: pointer; }
+.langsw button.on { background: var(--ink); color: var(--bg); }
+a:not(.btn) { color: var(--ink); text-decoration: underline; text-decoration-color: var(--ul); text-underline-offset: 3px; }
+a:not(.btn):hover { text-decoration-color: var(--ink); }
+#auth { width: min(420px, 94vw); }
+#auth input[type=text], #auth input[type=password] { width: 100%; }
+#turnstile { margin-top: 12px; }
+.row.wrap { flex-wrap: wrap; gap: 6px; }
+.prog { flex-basis: 100%; margin-top: 6px; font: 12px/1.5 var(--mono); color: var(--ink); }
+.prog .pb { height: 3px; background: var(--hair); margin: 4px 0; max-width: 360px; }
+.prog .pb i { display: block; height: 100%; background: var(--ink); }
+.prog .pf { color: var(--muted); word-break: break-word; }
+.who { font: 11px var(--mono); color: var(--muted); }
+.ev { padding: 8px 0; border-top: 1px solid var(--hair); font-size: 13px; }
+.ev:first-child { border-top: 0; }
+.ev .lv { font: 11px var(--mono); margin-right: 6px; }
+.ev .lv.act { color: var(--ok); } .ev .lv.warn { color: var(--warn); } .ev .lv.info { color: var(--muted); }
+pre.skill { max-height: 360px; overflow: auto; white-space: pre-wrap; font: 12px/1.45 var(--mono); background: var(--bg);
+  border: 1px solid var(--line); padding: 8px 10px; margin: 8px 0; }
+.engwrap { display: inline-flex; flex-direction: column; align-items: stretch; gap: 5px; }
+.usage { display: grid; grid-template-columns: auto minmax(46px, 1fr) auto; gap: 2px 7px; align-items: center; font: 11px/1.2 var(--mono); color: var(--muted); }
+.usage:empty { display: none; }
+.usage .t { height: 3px; border-radius: 0; background: var(--line); overflow: hidden; }
+.usage .t b { display: block; height: 100%; background: var(--ink); border-radius: 0; }
+.usage .w b { background: var(--warn); } .usage .x b { background: var(--bad); }
+.usage .x.p, .usage .x.l { color: var(--bad); }
+.usage .note { grid-column: 1 / -1; }
+input[type=number] { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 0; padding: 8px 10px; width: 100%; }
+.exdays { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px 14px; margin-top: 8px; }
+.exdays label { display: flex; gap: 8px; align-items: flex-start; font-size: 14px; cursor: pointer; }
+.exdays input { margin-top: 3px; accent-color: var(--ink); }
+.exrow { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.exset { padding: 12px 0; border-top: 1px solid var(--hair); font-size: 14px; }
+.exset:first-child { border-top: 0; }
+.drawn { margin-top: 10px; padding: 10px 12px; background: var(--accent-soft); border: 1px solid var(--line); border-radius: 0; }
+@media (max-width: 560px) {
+  header { min-height: 240px; padding-top: 40px; }
+  h1 span { margin-left: .5em; }
+  nav { gap: 16px; }
+  .exrow { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<canvas id="bg" aria-hidden="true"></canvas>
+<header>
+  <h1 id="title" class="sr" data-i18n="app.title"></h1>
+  <div class="poster" aria-hidden="true"><div class="pgrid" id="pgrid"></div></div>
+  <span id="worker" class="pill">…</span>
+  <button class="btn small" id="softBtn" type="button" hidden></button>
+  <button class="btn small" id="stopBtn" type="button" hidden></button>
+  <span class="grow"></span>
+  <span id="members" class="muted small" hidden></span>
+  <span id="me" class="muted small"></span>
+  <button class="btn small primary" id="loginBtn" type="button" hidden data-i18n="auth.signin"></button>
+  <button class="btn small" id="logoutBtn" type="button" hidden data-i18n="auth.logout"></button>
+  <span class="engwrap"><button class="btn small" id="claudeBtn" type="button">Claude</button><div class="usage" id="usage"></div></span>
+  <span class="langsw" role="group" aria-label="Language"><button type="button" data-lang="uk">UK</button><button type="button" data-lang="en">EN</button></span>
+  <button class="btn small" id="themeBtn" type="button"></button>
+</header>
+<dialog id="dlg">
+  <form method="dialog" class="dlg-x"><button class="btn small" data-i18n-label="common.close">×</button></form>
+  <h3 data-i18n="dlg.title"></h3>
+  <div id="dlgBody"></div>
+</dialog>
+<dialog id="auth">
+  <form method="dialog" class="dlg-x" id="aX" hidden><button class="btn small" data-i18n-label="common.close">×</button></form>
+  <h3 data-i18n="auth.title"></h3>
+  <div class="muted small" id="aWhy" style="margin-bottom:10px" hidden data-i18n="auth.why"></div>
+  <div class="seg">
+    <label><input type="radio" name="am" value="login" checked><span data-i18n="auth.login"></span></label>
+    <label><input type="radio" name="am" value="register"><span data-i18n="auth.register"></span></label>
+  </div>
+  <form id="aForm" autocomplete="on">
+    <label class="f" for="au" data-i18n="auth.user"></label>
+    <input type="text" id="au" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="30">
+    <div class="muted small" id="auHint" style="margin-top:4px" hidden data-i18n="auth.userHint"></div>
+    <label class="f" for="ap" data-i18n="auth.pass"></label>
+    <input type="password" id="ap" name="password" autocomplete="current-password" maxlength="200">
+    <div id="apBox" hidden>
+      <label class="f" for="ap2" data-i18n="auth.pass2"></label>
+      <input type="password" id="ap2" autocomplete="new-password" maxlength="200">
+      <div class="muted small" style="margin-top:4px" data-i18n="auth.passHint"></div>
+    </div>
+    <div id="turnstile"></div>
+    <div class="row" style="margin-top:14px"><button class="btn primary" id="aGo" type="submit"></button><span class="muted small" id="aState"></span></div>
+  </form>
+  <div class="msg" id="aMsg"></div>
+  <div class="muted small" style="margin-top:12px" data-i18n="auth.note"></div>
+</dialog>
+<nav>
+  <button data-tab="add" class="on" data-i18n="nav.add"></button>
+  <button data-tab="books" data-i18n="nav.books"></button>
+  <button data-tab="exams" data-i18n="nav.exams"></button>
+  <button data-tab="admin" id="adminTab" hidden>Admin</button>
+</nav>
+<main>
+<div id="notice"></div>
+
+<section class="tab on" id="tab-add">
+  <div class="card">
+    <div class="drop" id="drop">
+      <strong data-i18n="add.drop"></strong>
+      <span data-i18n="add.dropHint"></span>
+    </div>
+    <input type="file" id="pick" multiple hidden accept="image/*,.heic,.heif,.pdf,.doc,.docx,.odt,.ppt,.pptx,.odp,.xls,.xlsx,.rtf,.html,.htm,.txt,.md,.tex,.m,.c,.cpp,.h,.py">
+    <input type="file" id="cam" hidden accept="image/*" capture="environment">
+    <div class="row" style="margin-top:10px">
+      <button class="btn" id="camBtn" type="button" data-i18n="add.camera"></button>
+      <span class="muted small" id="count"></span>
+    </div>
+    <div class="files" id="files"></div>
+
+    <label class="f" data-i18n="add.what"></label>
+    <div class="seg">
+      <label><input type="radio" name="kind" value="notes" checked><span data-i18n="add.kind.notes"></span></label>
+      <label><input type="radio" name="kind" value="reference"><span data-i18n="add.kind.ref"></span></label>
+      <label><input type="radio" name="kind" value="asis"><span data-i18n="add.kind.asis"></span></label>
+    </div>
+    <div class="muted small" id="asisHint" hidden style="margin-top:8px" data-i18n="add.asisHint"></div>
+
+    <div id="dateBox">
+      <label class="f" for="udate" data-i18n="add.date"></label>
+      <input type="date" id="udate">
+      <div class="muted small" style="margin-top:6px" data-i18n="add.dateHelp"></div>
+      <div class="small" style="margin-top:4px" id="dateHint"></div>
+    </div>
+
+    <label class="f" for="subject" data-i18n="add.subject"></label>
+    <select id="subject"><option value=""></option></select>
+    <div id="asisBox" hidden>
+      <label class="f" for="utopic" data-i18n="add.topicLbl"></label>
+      <select id="utopic"></select>
+      <input type="text" id="utopicNew" data-i18n-ph="add.newTopicPh" hidden style="margin-top:8px">
+    </div>
+
+    <label class="f" for="note" data-i18n="add.note"></label>
+    <textarea id="note" data-i18n-ph="add.notePh"></textarea>
+
+    <div id="codeBox">
+      <label class="f" for="pcode" data-i18n="add.code"></label>
+      <textarea id="pcode" data-i18n-ph="add.codePh" spellcheck="false" style="font-family:ui-monospace,Consolas,monospace;min-height:84px"></textarea>
+      <div class="muted small" style="margin-top:6px" data-i18n="add.codeHelp"></div>
+    </div>
+
+    <div class="row" style="margin-top:14px">
+      <button class="btn primary" id="send" disabled data-i18n="add.send"></button>
+    </div>
+    <div class="bar" id="bar"><i></i></div>
+    <div class="msg" id="sendMsg"></div>
+  </div>
+
+  <h2 data-i18n="queue.h"></h2>
+  <div class="card"><ul class="list" id="queue"></ul></div>
+  <div id="failedWrap" hidden><h2 data-i18n="failed.h"></h2><div class="card"><ul class="list" id="failed"></ul></div></div>
+  <h2 data-i18n="recent.h"></h2>
+  <div class="card"><ul class="list" id="recent"></ul></div>
+</section>
+
+<section class="tab" id="tab-books">
+  <div id="autoAct"></div>
+  <div id="subjects"></div>
+  <div class="msg" id="dayMsg"></div>
+
+  <h2 data-i18n="sug.h" hidden></h2>
+  <div class="card" hidden>
+    <div class="muted small" data-i18n-html="sug.intro"></div>
+    <label class="f" for="ssubject" data-i18n="add.subject"></label>
+    <select id="ssubject"></select>
+    <label class="f" for="starget" data-i18n="sug.page"></label>
+    <select id="starget"></select>
+    <label class="f" for="stext" data-i18n="sug.what"></label>
+    <textarea id="stext" maxlength="1500" data-i18n-ph="sug.ph"></textarea>
+    <div class="muted small" id="scount">0 / 1500</div>
+    <label class="chk" id="shareRow"><input type="checkbox" id="sshare" checked><span data-i18n="sug.share"></span></label>
+    <div class="row" style="margin-top:12px"><button class="btn primary" id="ssend" type="button" data-i18n="sug.send"></button><span class="muted small" id="slimit"></span></div>
+    <div class="msg" id="smsg"></div>
+    <div id="sugMine" style="margin-top:8px"></div>
+  </div>
+
+  <h2 data-i18n="req.h"></h2>
+  <div class="card">
+    <div class="seg">
+      <label><input type="radio" name="rkind" value="explain" checked><span data-i18n="req.explain"></span></label>
+      <label><input type="radio" name="rkind" value="interactive"><span data-i18n="req.interactive"></span></label>
+    </div>
+    <label class="f" for="rsubject" data-i18n="add.subject"></label>
+    <select id="rsubject"></select>
+    <label class="f" for="rtopic" data-i18n="req.topic"></label>
+    <select id="rtopic"></select>
+    <label class="f" for="rtext" data-i18n="req.what"></label>
+    <textarea id="rtext" data-i18n-ph="req.ph"></textarea>
+    <div class="row" style="margin-top:14px"><button class="btn primary" id="rsend" data-i18n="req.send"></button></div>
+    <div class="msg" id="rmsg"></div>
+  </div>
+
+  <div id="genRefs"></div>
+  <div id="myAccount" hidden>
+    <h2 data-i18n="me.h"></h2>
+    <div class="card">
+      <label class="f" for="pwOld" data-i18n="me.pwOld"></label>
+      <input type="password" id="pwOld" autocomplete="current-password" maxlength="200">
+      <label class="f" for="pwNew" data-i18n="me.pwNew"></label>
+      <input type="password" id="pwNew" autocomplete="new-password" maxlength="200">
+      <div class="row" style="margin-top:12px"><button class="btn" id="pwGo" type="button" data-i18n="me.pwGo"></button></div>
+      <div class="msg" id="pwMsg"></div>
+    </div>
+  </div>
+</section>
+
+<section class="tab" id="tab-exams">
+  <div class="card">
+    <strong data-i18n="ex.h"></strong>
+    <div class="muted small" style="margin-top:4px" data-i18n="ex.intro"></div>
+    <label class="f" for="exsubject" data-i18n="add.subject"></label>
+    <select id="exsubject"></select>
+    <label class="f" data-i18n="ex.days"></label>
+    <div class="row" style="gap:6px">
+      <button class="btn small" type="button" id="exAll" data-i18n="ex.all"></button>
+      <button class="btn small" type="button" id="exNone" data-i18n="ex.noneBtn"></button>
+    </div>
+    <div class="exdays" id="exdays"></div>
+    <div class="exrow">
+      <div><label class="f" for="exn" data-i18n="ex.count"></label><input type="number" id="exn" min="1" max="30" value="10"></div>
+      <div><label class="f" for="exper" data-i18n="ex.per"></label><input type="number" id="exper" min="1" max="5" value="3"></div>
+    </div>
+    <label class="f" data-i18n="ex.mix"></label>
+    <div class="seg">
+      <label><input type="radio" name="exmix" value="mixed" checked><span data-i18n="ex.mix.mixed"></span></label>
+      <label><input type="radio" name="exmix" value="theory"><span data-i18n="ex.mix.theory"></span></label>
+      <label><input type="radio" name="exmix" value="problems"><span data-i18n="ex.mix.problems"></span></label>
+    </div>
+    <label class="f" data-i18n="ex.level"></label>
+    <div class="seg">
+      <label><input type="radio" name="exlevel" value="easier"><span data-i18n="ex.level.easier"></span></label>
+      <label><input type="radio" name="exlevel" value="same" checked><span data-i18n="ex.level.same"></span></label>
+      <label><input type="radio" name="exlevel" value="harder"><span data-i18n="ex.level.harder"></span></label>
+    </div>
+    <label class="f" for="exlang" data-i18n="ex.lang"></label>
+    <select id="exlang">
+      <option value="en" data-i18n="ex.lang.en"></option>
+      <option value="de" data-i18n="ex.lang.de"></option>
+      <option value="uk" data-i18n="ex.lang.uk"></option>
+    </select>
+    <label class="f" for="extext" data-i18n="ex.wish"></label>
+    <textarea id="extext" maxlength="400" data-i18n-ph="ex.wishPh"></textarea>
+    <div class="row" style="margin-top:14px"><button class="btn primary" id="exmake" type="button" data-i18n="ex.make"></button></div>
+    <div class="msg" id="exmsg"></div>
+  </div>
+  <div id="exqueue"></div>
+  <div id="exsets"></div>
+</section>
+
+<section class="tab" id="tab-admin">
+  <div class="card" id="svCard" hidden>
+    <strong data-i18n="sv.h"></strong>
+    <div class="muted small" style="margin-top:4px" data-i18n="sv.intro"></div>
+    <div id="svBody"></div>
+  </div>
+  <div class="card" id="skCard" hidden>
+    <strong data-i18n="sk.h"></strong>
+    <div class="muted small" style="margin-top:4px" data-i18n="sk.intro"></div>
+    <div class="msg" id="skMsg"></div>
+    <div id="skBody"></div>
+  </div>
+  <div class="card" id="acctCard" hidden>
+    <strong data-i18n="acc.h"></strong>
+    <div class="small" style="margin-top:6px" id="acctUrl"></div>
+    <div class="msg" id="acctMsg"></div>
+    <div id="acctList"></div>
+  </div>
+  <div class="card">
+    <strong data-i18n="adm.main"></strong>
+    <div class="muted small" style="margin-top:4px" data-i18n="adm.intro"></div>
+    <div id="mctl"></div>
+  </div>
+  <div id="mlist"></div>
+</section>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+let S = null, picked = [];
+let THEME = document.documentElement.dataset.theme === "light" ? "light" : "dark";     // set early by the script in <head>
+
+/* ---------- language: Ukrainian or English ---------- */
+// One table, three columns: key, Ukrainian, English. A function entry takes the values to put into the sentence;
+// an array entry holds the word forms for plural(). New text must get BOTH languages.
+let LANG = (() => {
+  try { const v = localStorage.getItem("lang"); if (v === "uk" || v === "en") return v; } catch (e) {}
+  return /^(uk|ru|be)/i.test(navigator.language || "") ? "uk" : "en";
+})();
+const T = {uk: {}, en: {}};
+/*D-START*/
+const D = [
+  ["app.title", "Навчальні книги", "Study books"],
+  ["app.tag", "Лекції, нотатки й фото дошки стають чистою книгою.", "Lectures, notes and board photos become a clean book."],
+  ["app.short", "КНИГИ", "BOOKS"],
+  ["common.close", "Закрити", "Close"],
+  ["common.failed", "Не вдалося", "Failed"],
+  ["common.retry", "Ще раз", "Retry"],
+  ["common.connected", "підключено", "connected"],
+  ["unit.mb", "МБ", "MB"],
+  ["unit.s", "с", "s"],
+  ["unit.min", "хв", "min"],
+  ["unit.pages", "с.", "p."],
+  ["nav.add", "Додати", "Add"],
+  ["nav.books", "Книги", "Books"],
+  ["nav.exams", "Білети", "Exams"],
+  ["nav.admin", "Адмін", "Admin"],
+  ["nav.adminN", n => `Адмін (${n})`, n => `Admin (${n})`],
+  ["dlg.title", "Чим обробляти мої матеріали", "What processes my material"],
+
+  ["pl.file", ["файл", "файли", "файлів"], ["file", "files"]],
+  ["pl.entry", ["запис", "записи", "записів"], ["entry", "entries"]],
+  ["pl.day", ["день", "дні", "днів"], ["day", "days"]],
+  ["pl.ticket", ["білет", "білети", "білетів"], ["ticket", "tickets"]],
+  ["pl.question", ["питання", "питання", "питань"], ["question", "questions"]],
+  ["pl.class", ["заняття", "заняття", "занять"], ["class", "classes"]],
+
+  ["auth.title", "Вхід у Навчальні книги", "Sign in to Study books"],
+  ["hdr.members", n => `Учасників: ${n}`, n => `Members: ${n}`],
+  ["auth.signin", "Увійти", "Sign in"],
+  ["auth.why", "Ти читаєш головну книгу без акаунта. Щоб додавати матеріали, пропозиції чи запити, увійди або зареєструйся.", "You are reading the main book without an account. To add materials, suggestions or requests, sign in or sign up."],
+  ["pill.view", "Лише перегляд", "Read only"],
+  ["auth.login", "Вхід", "Sign in"],
+  ["auth.register", "Реєстрація", "Sign up"],
+  ["auth.user", "Ім'я користувача", "Username"],
+  ["auth.userHint", "3–30 символів: малі латинські літери, цифри, - і _", "3–30 characters: lowercase letters, digits, - and _"],
+  ["auth.pass", "Пароль", "Password"],
+  ["auth.pass2", "Пароль ще раз", "Repeat the password"],
+  ["auth.passHint", "Не менше 10 символів. Забутий пароль може скинути тільки власник сайту.", "At least 10 characters. Only the site owner can reset a forgotten password."],
+  ["auth.goLogin", "Увійти", "Sign in"],
+  ["auth.goRegister", "Створити акаунт", "Create account"],
+  ["auth.checking", "Перевіряю, що ти людина…", "Checking that you are a person…"],
+  ["auth.mismatch", "Паролі не збігаються", "The passwords do not match"],
+  ["auth.fill", "Введи ім'я і пароль", "Enter a username and a password"],
+  ["auth.needHuman", "Спершу пройди перевірку Cloudflare вище", "Complete the Cloudflare check above first"],
+  ["auth.noCrypto", "Цей браузер не може пройти перевірку (потрібне з'єднання https)", "This browser cannot run the check (an https connection is needed)"],
+  ["auth.noConn", "Немає з'єднання з сервером", "No connection to the server"],
+  ["auth.note", "У кожного свій простір: ніхто не бачить чужих матеріалів. Матеріали обробляє твоя власна підписка Claude або твій ключ OpenRouter.",
+    "Everybody has their own space: nobody sees other people's material. Your material is processed with your own Claude subscription or your own OpenRouter key."],
+  ["auth.logout", "Вийти", "Sign out"],
+  ["me.h", "Акаунт", "Account"],
+  ["me.pwOld", "Поточний пароль", "Current password"],
+  ["me.pwNew", "Новий пароль (від 10 символів)", "New password (10+ characters)"],
+  ["me.pwGo", "Змінити пароль", "Change password"],
+  ["me.pwDone", "Пароль змінено", "Password changed"],
+  ["add.tooBig", mb => `Файли разом завеликі: не більше ${mb} МБ за одне завантаження (Cloudflare не пропускає більше). Розбий на кілька завантажень.`,
+    mb => `The files are too big together: at most ${mb} MB per upload (Cloudflare does not let more through). Split them into several uploads.`],
+  ["acc.h", "Публічний доступ (Cloudflare)", "Public access (Cloudflare)"],
+  ["acc.url", "Посилання для всіх:", "Link for everybody:"],
+  ["acc.noUrl", "Тунель ще не запущено", "The tunnel is not running yet"],
+  ["acc.count", (n, max) => `Акаунтів: ${n} з ${max}`, (n, max) => `Accounts: ${n} of ${max}`],
+  ["acc.none", "Поки ніхто не зареєструвався", "Nobody has signed up yet"],
+  ["acc.last", "останній вхід", "last sign-in"],
+  ["acc.never", "ще не входив", "never signed in"],
+  ["acc.disabled", "вимкнено", "disabled"],
+  ["acc.disable", "Вимкнути", "Disable"],
+  ["acc.enable", "Увімкнути", "Enable"],
+  ["acc.logout", "Вийти скрізь", "Sign out everywhere"],
+  ["acc.reset", "Скинути пароль", "Reset password"],
+  ["acc.done", "Готово", "Done"],
+  ["acc.temp", (u, p) => `Тимчасовий пароль для ${u}: ${p}  (передай людині; вона змінить його в «Книги → Акаунт»)`,
+    (u, p) => `Temporary password for ${u}: ${p}  (pass it on; they change it under Books → Account)`],
+
+  ["add.drop", "Перетягни файли сюди або натисни, щоб вибрати", "Drop files here or click to choose"],
+  ["add.dropHint", "Фото, PDF, Word, PowerPoint, текст. Фото однієї лекції краще надсилати разом, в одному завантаженні.",
+    "Photos, PDF, Word, PowerPoint, text. Send the photos of one lecture together, in one upload."],
+  ["add.camera", "Зробити фото", "Take a photo"],
+  ["add.what", "Що це", "What is it"],
+  ["add.kind.notes", "Навчальний матеріал", "Study material"],
+  ["add.kind.ref", "Підручник для звірки", "Reference textbook"],
+  ["add.kind.asis", "PDF без редагування", "PDF as is"],
+  ["add.asisHint", "PDF вставляється в обидві книги сторінка в сторінку, у своєму розмірі, без транскрипції й правок. Claude не потрібен: книги оновляться за кілька секунд. Предмет обов'язковий.",
+    "The PDF goes into both books page by page, at its own size, with no transcription or edits. No AI is needed: the books update within seconds. A subject is required."],
+  ["add.date", "Дата заняття", "Date of the class"],
+  ["add.dateHelp", "Коли відбулася лекція чи заняття, а не коли ти це надсилаєш. Розділ книги = ця дата. Щоб доповнити минуле заняття, постав його дату.",
+    "When the lecture or class was held, not when you send this. A book chapter = this date. To add to an earlier class, set its date."],
+  ["add.dayNew", "У книзі за цю дату ще нічого немає: буде новий розділ.", "Nothing in the book for this date yet: a new chapter will be created."],
+  ["add.dayHas", n => `У книзі за цю дату вже є ${pl(n, "pl.entry")}: матеріал піде в той самий розділ як доповнення.`,
+    n => `The book already has ${pl(n, "pl.entry")} for this date: the material goes into the same chapter as a supplement.`],
+  ["add.needDate", "Вкажи дату заняття", "Enter the class date"],
+  ["add.subject", "Предмет", "Subject"],
+  ["add.auto", "Визначити автоматично", "Detect automatically"],
+  ["add.pickSubject", "— обери предмет —", "— choose a subject —"],
+  ["add.topicLbl", "Тема (розділ книги)", "Topic (book chapter)"],
+  ["add.topicDefault", "Lecture PDFs (за замовчуванням)", "Lecture PDFs (default)"],
+  ["add.topicNew", "Нова тема…", "New topic…"],
+  ["add.newTopicPh", "Назва нової теми", "Name of the new topic"],
+  ["add.note", "Примітка (необов'язково)", "Note (optional)"],
+  ["add.notePh", "Наприклад: лекція 3, 21.10; або: вправи, лист 2", "For example: lecture 3, 21 Oct; or: exercises, sheet 2"],
+  ["add.send", "Надіслати", "Send"],
+  ["add.needSubject", "Обери предмет", "Choose a subject"],
+  ["add.pdfOnly", "Без редагування приймаються тільки PDF", "Only PDF files are accepted as is"],
+  ["add.needTopic", "Напиши назву нової теми", "Enter the name of the new topic"],
+  ["add.sent", "Надіслано. Обробка йде у фоні: книги оновляться самі.", "Sent. Processing runs in the background; the books update by themselves."],
+  ["add.error", x => "Помилка: " + x, x => "Error: " + x],
+  ["add.dupes", x => `Ці файли вже були завантажені раніше, тому їх пропущено: ${x}.`, x => `These files were uploaded before, so they were skipped: ${x}.`],
+  ["add.dupesBy", x => `Їх уже завантажили інші учасники: ${x}.`, x => `Other participants already uploaded them: ${x}.`],
+  ["add.iqueued", n => `Інтерактивних сторінок: ${n}. ШІ перегляне кожну, виправить що треба й покладе в потрібний предмет і тему.`, n => `Interactive pages: ${n}. The AI will review each one, fix what is needed and file it under the right subject and topic.`],
+  ["add.code", "Або встав код сторінки", "Or paste the page code"],
+  ["add.codePh", "<!DOCTYPE html> …", "<!DOCTYPE html> …"],
+  ["add.codeHelp", "З телефону: у артефакті натисни «Копіювати» і встав сюди. За посиланням на артефакт сайт не може отримати сторінку (потрібен вхід у claude.ai, а публічне посилання віддає лише оболонку).", "From a phone: press “Copy” in the artifact and paste it here. The site cannot fetch a page from an artifact link (it needs a claude.ai sign-in, and a public link returns only the app shell)."],
+  ["add.noConn", "Немає з'єднання з сервером", "No connection to the server"],
+  ["prog.chunk", (i, n, p) => `порція ${i} з ${n} · сторінки ${p}`, (i, n, p) => `chunk ${i} of ${n} · pages ${p}`],
+  ["prog.done", (d, n) => `готово ${d} з ${n}`, (d, n) => `${d} of ${n} done`],
+  ["prog.pages", n => `усього сторінок: ${n}`, n => `pages in total: ${n}`],
+  ["prog.files", "файли: ", "files: "],
+  ["prog.group", "разом із сусідніми невеликими завантаженнями", "together with other small uploads"],
+  ["prog.start", "готує сторінки…", "preparing the pages…"],
+  ["prog.model", m => `модель ${m}`, m => `model ${m}`],
+  ["prog.turn", n => `крок ${n}`, n => `step ${n}`],
+  ["prog.for", m => `${m} хв`, m => `${m} min`],
+  ["prog.pass.transcribe", "розпізнає сторінки", "reading the pages"],
+  ["prog.pass.refs", "шукає в підручниках", "looking up the textbooks"],
+  ["prog.pass.clean", "пише чистовий текст англійською", "writing the clean English text"],
+  ["prog.pass.repair", "дописує пропущене", "completing what is missing"],
+  ["prog.pass.fuse", "зливає з тією самою лекцією від іншого учасника", "merging with the same lecture from another participant"],
+  ["prog.pass.place", "додає в книгу", "adding to the book"],
+  ["prog.pass.explain", "пише пояснення", "writing the explanation"],
+  ["prog.pass.interactive", "робить інтерактивну сторінку", "making the interactive page"],
+  ["prog.pass.ipage", "перевіряє й виправляє завантажену сторінку", "checking and fixing the uploaded page"],
+  ["books.by", n => `додав(-ла): ${n}`, n => `added by ${n}`],
+  ["books.with", x => `доповнили: ${x}`, x => `supplemented by ${x}`],
+  ["books.mine", "твоє: можна змінити дату", "yours: you can change the date"],
+  ["add.remove", "Прибрати", "Remove"],
+  ["add.count", (n, size) => `${pl(n, "pl.file")}, ${size}`, (n, size) => `${pl(n, "pl.file")}, ${size}`],
+
+  ["queue.h", "Черга", "Queue"],
+  ["failed.h", "Не вдалося", "Failed"],
+  ["recent.h", "Нещодавно оброблено", "Recently processed"],
+  ["queue.empty", "Черга порожня", "The queue is empty"],
+  ["recent.none", "Поки нічого", "Nothing yet"],
+  ["queue.sendNow", "▶ Обробити зараз", "▶ Process now"],
+  ["queue.del", "✕ Видалити", "✕ Delete"],
+  ["queue.deleting", "видаляється…", "deleting…"],
+  ["queue.delFile", "Видалити цей файл із завантаження", "Remove this file from the upload"],
+  ["queue.delFileAsk", n => `Видалити файл «${n}» із завантаження? Усе, що вже зроблено по цьому завантаженню, буде скинуто, і воно почнеться спочатку з тих файлів, що лишились.`, n => `Remove the file “${n}” from the upload? Everything already done for this upload is reset, and it starts again with the files that are left.`],
+  ["queue.delAsk", "Видалити це з черги? Файли завантаження буде стерто.", "Delete this from the queue? The uploaded files will be erased."],
+  ["queue.delRunning", "Це зараз обробляється. Зупинити обробку й видалити? Усе вже зроблене по ньому пропаде.", "This is being processed right now. Stop it and delete it? Everything already done for it will be lost."],
+  ["theme.toLight", "Світла тема", "Light theme"],
+  ["theme.toDark", "Темна тема", "Dark theme"],
+  ["queue.req", "Запит: ", "Request: "],
+  ["queue.sug", "Пропозиція: ", "Suggestion: "],
+  ["queue.mrg", "Доповнення користувача: ", "User addition: "],
+  ["queue.attempt", (n, e) => `спроба ${n}: ${e}`, (n, e) => `attempt ${n}: ${e}`],
+  ["recent.ref", "додано в підручники для звірки", "added to the reference textbooks"],
+  ["recent.unread", "не прочитано:", "could not be read:"],
+  ["recent.day", d => `заняття ${d}`, d => `class of ${d}`],
+
+  ["pill.noOR", "OpenRouter не налаштований", "OpenRouter is not set up"],
+  ["pill.noClaude", "Claude не підключений", "Claude is not connected"],
+  ["pill.paused", "Пауза: ліміт або помилка входу", "Paused: limit or sign-in error"],
+  ["pill.pausedOR", "Чекаю: безкоштовні моделі зайняті", "Waiting: free models are busy"],
+  ["pill.queued", "У черзі", "Queued"],
+  ["pill.stopped", "Зупинено", "Stopped"],
+  ["pill.limit", p => `Пауза: використано ${p} % ліміту`, p => `Paused: ${p} % of the limit used`],
+  ["note.limit", (p, w, r) => `Використано ${p} % ліміту Claude (${w})${r ? `, скидання ${r}` : ""}. Нова обробка не почнеться, поки не натиснеш «Продовжити».`,
+    (p, w, r) => `${p} % of your Claude limit is used (${w})${r ? `, resets ${r}` : ""}. Nothing new starts until you press “Continue”.`],
+  ["limit.next", n => `Наступна зупинка — на ${n} %.`, n => `The next stop is at ${n} %.`],
+  ["limit.last", "Далі в цьому вікні зупинок не буде, аж до вичерпання ліміту.", "There are no more stops in this window, up to the end of the limit."],
+  ["limit.go", "▶ Продовжити", "▶ Continue"],
+  ["pill.batch", n => `Пауза: ${n} порцій оброблено`, n => `Paused: ${n} chunks done`],
+  ["note.batch", n => `Оброблено ${n} порцій після останнього «Продовжити». Відсоток ліміту Claude не повідомляє, тож перевір його сам і натисни «Продовжити», щоб піти далі.`,
+    n => `${n} chunks processed since the last “Continue”. Claude does not report the share of the limit used, so check it yourself and press “Continue” to go on.`],
+  ["stop.btn", "⏹ Зупинити зараз", "⏹ Stop now"],
+  ["stop.tip", "Зупинити обробку твоїх матеріалів негайно. Те, що зараз в роботі, обірветься (ця незавершена порція буде пророблена знову), лишиться в черзі й не рахується як невдала спроба.",
+    "Stop processing your material right away. What is being processed is cut off (that unfinished chunk is redone later), stays in the queue and does not count as a failed attempt."],
+  ["soft.btn", "⏸ Після порції", "⏸ After this chunk"],
+  ["soft.tip", "Дати доробити поточну порцію (кілька хвилин), нічого не втрачаючи, і тоді зупинитись.",
+    "Let the current chunk finish (a few minutes), losing nothing, and then stop."],
+  ["soft.cancel", "Скасувати зупинку", "Cancel the stop"],
+  ["note.soft", "Зупинюсь, щойно доробиться поточна порція. Нова порція не почнеться.",
+    "Will stop as soon as the current chunk is done. No new chunk will start."],
+  ["stop.resume", "▶ Продовжити", "▶ Continue"],
+  ["stop.resumeTip", "Продовжити обробку черги", "Continue processing the queue"],
+  ["note.stopped", "Обробку зупинено: нічого нового не почнеться, поки не натиснеш «Продовжити» вгорі. Черга збережена.",
+    "Processing is stopped: nothing new starts until you press “Continue” at the top. The queue is kept."],
+  ["pill.done", "Усе оброблено", "All done"],
+  ["pill.down", "Сервер недоступний", "Server unavailable"],
+  ["btn.setup", "Налаштувати двигун", "Set up the engine"],
+  ["btn.free", "безкоштовні (авто)", "free (auto)"],
+  ["note.noOR", "Обрано OpenRouter, але ключ або модель не задані. Натисни «Налаштувати двигун» вгорі. Поки що завантаження зберігаються й чекають.",
+    "OpenRouter is selected, but the key or the model is not set. Press “Set up the engine” at the top. Uploads are kept and wait meanwhile."],
+  ["note.noEngine", "Твої матеріали обробляються твоєю власною підпискою Claude або твоїм ключем OpenRouter. Натисни «Налаштувати двигун» вгорі, щоб увійти або вставити ключ. Поки що завантаження зберігаються й чекають.",
+    "Your material is processed with your own Claude subscription or your own OpenRouter key. Press “Set up the engine” at the top to sign in or paste a key. Uploads are kept and wait meanwhile."],
+  ["note.blocked", b => `Обробка на паузі: ${b} Повтор — автоматично кожні 5 хвилин.`, b => `Processing is paused: ${b} It retries automatically every 5 minutes.`],
+  ["note.digest", (c, e) => `Вижимка розділу «${c}» не вийшла: <code>${e}</code>`, (c, e) => `The summary of chapter “${c}” failed: <code>${e}</code>`],
+  ["note.build", (s, ed, e) => `Книга «${s}» (${ed}) не зібралася: <code>${e}</code>`, (s, ed, e) => `The book “${s}” (${ed}) failed to build: <code>${e}</code>`],
+
+  ["books.meta", (e, d) => `${pl(e, "pl.entry")} за ${pl(d, "pl.day")}`, (e, d) => `${pl(e, "pl.entry")} over ${pl(d, "pl.day")}`],
+  ["books.updated", d => ` · оновлено ${d}`, d => ` · updated ${d}`],
+  ["books.clean", s => `Чиста книга (EN) · ${s}`, s => `Clean book (EN) · ${s}`],
+  ["books.orig", s => `Оригінал · ${s}`, s => `Original · ${s}`],
+  ["books.building", "Книга ще збирається", "The book is still being built"],
+  ["books.inter", n => `Інтерактивні сторінки (${n})`, n => `Interactive pages (${n})`],
+  ["books.days", n => `Заняття за датами (${n}) · змінити дату запису`, n => `Classes by date (${n}) · change an entry's date`],
+  ["books.dateMoved", "Дату змінено. Книги перезберуться за кілька хвилин.", "Date changed. The books will rebuild in a few minutes."],
+  ["books.refs", n => `Підручники для звірки (${n})`, n => `Reference textbooks (${n})`],
+  ["books.noText", ", без текстового шару", ", no text layer"],
+  ["books.empty", "Книг ще немає. Додай перший матеріал на вкладці «Додати».", "There are no books yet. Add your first material on the “Add” tab."],
+  ["books.shared", "Спільна книга: усі бачать ті самі книги й інтерактивні сторінки, а нові завантаження всіх учасників потрапляють сюди. Ту саму лекцію від кількох людей система розпізнає й зливає в один запис. Дату запису змінює той, хто його завантажив, і власник книги.",
+    "Shared book: everyone sees the same books and interactive pages, and every participant's new uploads land here. The same lecture from several people is recognised and merged into one entry. An entry's date can be changed by the person who uploaded it and by the book's owner."],
+  ["books.genRefs", "Загальні підручники для звірки", "General reference textbooks"],
+
+  ["act.ingest", "Claude розбирає завантаження…", "Claude is reading the upload…"],
+  ["req.paused", "На паузі", "Paused"],
+  ["req.runNow", "▶ Згенерувати", "▶ Generate"],
+  ["act.explain", "Claude пише пояснення…", "Claude is writing the explanation…"],
+  ["act.interactive", "Claude робить інтерактивну сторінку…", "Claude is making the interactive page…"],
+  ["act.ipage_edit", "Claude змінює сторінку…", "Claude is changing the page…"],
+  ["ipg.edit", "Змінити", "Change"],
+  ["ipg.copyNote", "Це чужа сторінка: оригінал лишиться, а твоя зміна з'явиться окремою сторінкою.", "This is someone else's page: the original stays, and your change appears as a separate page."],
+  ["ipg.undo", "Скасувати зміну", "Undo change"],
+  ["ipg.send", "Надіслати запит", "Send request"],
+  ["ipg.cancel", "Закрити", "Close"],
+  ["ipg.edited", "змінено за запитом", "changed on request"],
+  ["ipg.editing", "Зміна:", "Change:"],
+  ["ipg.ph", "Що змінити на цій сторінці? Наприклад: додай повзунок для маси, зроби графік більшим", "What should change on this page? For example: add a slider for the mass, make the plot bigger"],
+  ["act.suggest", "Claude розглядає пропозицію…", "Claude is reviewing the suggestion…"],
+  ["act.merge", "Claude аналізує доповнення для основної книги…", "Claude is analysing additions for the main book…"],
+  ["act.digest", "Claude пише вижимку розділу…", "Claude is writing the chapter summary…"],
+  ["act.asis", "Додається PDF…", "Adding the PDF…"],
+  ["act.exam", "Claude складає білети…", "Claude is making the tickets…"],
+  ["act.build", "Книга збирається, зараз файл може бути старим…", "The book is being built; the file may be out of date for now…"],
+  ["act.queued", "У черзі на обробку", "Queued for processing"],
+
+  ["sug.h", "Запропонувати доповнення до сторінки", "Suggest an addition to a page"],
+  ["sug.intro", "Кожен у своєму просторі може запропонувати доповнення чи виправлення до окремого запису книги або до інтерактивної сторінки. Claude перевірить пропозицію за підручниками й сам вирішить, чи вносити її. Зміну можна скасувати. Якщо погодишся, прийнята зміна піде ще й адміну на розгляд для основної книги.<br>Захист від зловживань: до 5 пропозицій на добу й не більше 3 одночасно, до 1500 символів. Текст пропозиції ніколи не виконується як команда. Кожна зміна проходить автоматичні перевірки: тільки невеликі правки, без посилань, скриптів і зовнішніх ресурсів.",
+    "Everyone, in their own space, can suggest an addition or a correction to a single book entry or to an interactive page. Claude checks the suggestion against the textbooks and decides by itself whether to apply it. A change can be undone. If you agree, an accepted change also goes to the admin for the main book.<br>Protection against abuse: up to 5 suggestions a day and no more than 3 at a time, up to 1500 characters. The text of a suggestion is never run as a command. Every change goes through automatic checks: only small edits, no links, scripts or external resources."],
+  ["sug.page", "Сторінка", "Page"],
+  ["sug.what", "Що додати або виправити", "What to add or correct"],
+  ["sug.ph", "Наприклад: у прикладі з модулем додати зауваження про випадок z = 0 і пояснити чому |z| = 0 тоді й лише тоді",
+    "For example: in the example with the modulus, add a remark about the case z = 0 and explain why |z| = 0 if and only if z = 0"],
+  ["sug.share", "Запропонувати й в основну книгу (адмін побачить текст пропозиції та саму зміну)", "Suggest it for the main book too (the admin will see the text of the suggestion and the change itself)"],
+  ["sug.send", "Запропонувати", "Suggest"],
+  ["sug.noPages", "У цього предмета ще немає сторінок з текстом", "This subject has no pages with text yet"],
+  ["sug.wait", (why, w) => `${why}. Спробуй пізніше (${w}).`, (why, w) => `${why}. Try again later (${w}).`],
+  ["sug.today", (u, m) => `Сьогодні: ${u} з ${m}`, (u, m) => `Today: ${u} of ${m}`],
+  ["sug.s.queued", "чекає розгляду", "waiting for review"],
+  ["sug.s.accepted", "прийнято", "accepted"],
+  ["sug.s.partial", "прийнято частково", "partly accepted"],
+  ["sug.s.rejected", "відхилено", "rejected"],
+  ["sug.s.failed", "не вдалося", "failed"],
+  ["sug.s.undone", "скасовано", "undone"],
+  ["sug.changed", "Що змінено:", "What changed:"],
+  ["sug.main", "Основна книга:", "Main book:"],
+  ["sug.undo", "Скасувати зміну", "Undo the change"],
+  ["sug.pickPage", "Спершу обери сторінку", "Choose a page first"],
+  ["sug.ok", "Прийнято. Claude розгляне пропозицію найближчим часом, результат з'явиться нижче.", "Received. Claude will review the suggestion soon; the result will appear below."],
+  ["sug.undone", "Зміну скасовано, книга оновиться.", "The change was undone; the book will update."],
+
+  ["req.h", "Пояснення або інтерактивна сторінка", "Explanation or interactive page"],
+  ["req.explain", "Пояснення в книгу", "Explanation for the book"],
+  ["req.interactive", "Інтерактивна сторінка", "Interactive page"],
+  ["req.topic", "Тема", "Topic"],
+  ["req.what", "Що саме", "What exactly"],
+  ["req.ph", "Наприклад: чому момент сили не залежить від точки прикладання вздовж лінії дії", "For example: why the moment of a force does not depend on the point of application along its line of action"],
+  ["req.send", "Надіслати запит", "Send the request"],
+  ["req.empty", "Напиши, що саме пояснити чи показати", "Write what exactly to explain or show"],
+  ["req.queued", "Запит у черзі. Результат з'явиться в книзі або в списку інтерактивних сторінок.", "The request is queued. The result will appear in the book or in the list of interactive pages."],
+
+  ["usage.none", "Ліміти з'являться після першої обробки", "Limits will appear after the first run"],
+  ["usage.tip", "Дані взято з відповідей Claude Code під час обробки. Вони оновлюються після кожної обробки, а не в реальному часі.", "The data comes from Claude Code's replies while it processes. It updates after each run, not in real time."],
+  ["usage.type.five_hour", "5 год", "5 h"],
+  ["usage.type.seven_day", "тиждень", "week"],
+  ["usage.type.seven_day_opus", "тиждень · Opus", "week · Opus"],
+  ["usage.type.seven_day_sonnet", "тиждень · Sonnet", "week · Sonnet"],
+  ["usage.type.seven_day_overage_included", "тиждень · модель", "week · model"],
+  ["usage.type.overage", "додатково", "extra"],
+  ["usage.ok", "ок", "ok"],
+  ["usage.rejected", "вичерпано", "used up"],
+  ["usage.resets", hm => `скидання ${hm}`, hm => `resets ${hm}`],
+  ["usage.seen", hm => `оновлено ${hm}`, hm => `updated ${hm}`],
+  ["usage.orToday", "безкоштовних запитів сьогодні", "free requests today"],
+  ["usage.orPaused", hm => `пауза до ${hm}`, hm => `paused until ${hm}`],
+  ["ex.h", "Скласти білети до екзамену", "Make exam tickets"],
+  ["ex.intro", "Claude складає набір екзаменаційних білетів з матеріалу обраних занять: теоретичні питання й задачі, у кожного білета така сама складність, а теми різні. Виходить два PDF: білети (для друку) і ті самі білети з еталонними відповідями. Далі можна тягнути випадковий білет, як на екзамені. Питання складаються з твоїх книг і підручників для звірки, тож відповіді варто перевіряти. PDF без тексту (завантажені «як є») у білети не потрапляють.",
+    "Claude makes a set of exam tickets from the material of the classes you choose: theory questions and problems, every ticket about equally hard and on different topics. You get two PDFs: the tickets (to print) and the same tickets with model answers. Then you can draw a random ticket, as at the exam. The questions are made from your books and the reference textbooks, so check the answers. PDFs with no text (uploaded “as is”) are not used."],
+  ["ex.days", "Заняття, з яких брати питання", "Classes to take the questions from"],
+  ["ex.all", "Усі", "All"],
+  ["ex.noneBtn", "Жодного", "None"],
+  ["ex.noText", "лише PDF без тексту", "PDF only, no text"],
+  ["ex.noClasses", "У цього предмета ще немає занять. Додай матеріал на вкладці «Додати».", "This subject has no classes yet. Add material on the “Add” tab."],
+  ["ex.count", "Скільки білетів", "How many tickets"],
+  ["ex.per", "Питань у білеті", "Questions per ticket"],
+  ["ex.mix", "З чого складається білет", "What a ticket consists of"],
+  ["ex.mix.mixed", "Теорія й задачі", "Theory and problems"],
+  ["ex.mix.theory", "Лише теорія", "Theory only"],
+  ["ex.mix.problems", "Лише задачі", "Problems only"],
+  ["ex.level", "Складність", "Difficulty"],
+  ["ex.level.easier", "Легше, ніж на заняттях", "Easier than in class"],
+  ["ex.level.same", "Як на заняттях", "As in class"],
+  ["ex.level.harder", "Складніше", "Harder"],
+  ["ex.lang", "Мова білетів", "Language of the tickets"],
+  ["ex.lang.en", "Англійська", "English"],
+  ["ex.lang.de", "Німецька", "German"],
+  ["ex.lang.uk", "Українська", "Ukrainian"],
+  ["ex.wish", "Побажання (необов'язково)", "Wishes (optional)"],
+  ["ex.wishPh", "Наприклад: більше задач на інтеграли; без доведень; питання в стилі минулорічних білетів", "For example: more problems on integrals; no proofs; questions in the style of last year's tickets"],
+  ["ex.make", "Скласти білети", "Make the tickets"],
+  ["ex.needDays", "Познач хоча б одне заняття з текстом", "Tick at least one class that has text"],
+  ["ex.queued", "Запит у черзі. Білети з'являться нижче, коли Claude їх складе (зазвичай кілька хвилин).", "The request is queued. The tickets will appear below when Claude has made them (usually a few minutes)."],
+  ["ex.setsH", "Мої набори білетів", "My ticket sets"],
+  ["ex.none", "Наборів білетів поки немає", "There are no ticket sets yet"],
+  ["ex.title", (n, per) => `${pl(n, "pl.ticket")} × ${pl(per, "pl.question")}`, (n, per) => `${pl(n, "pl.ticket")} × ${pl(per, "pl.question")}`],
+  ["ex.daysAll", n => `усі ${pl(n, "pl.class")}`, n => `all ${pl(n, "pl.class")}`],
+  ["ex.daysSome", (n, a, b) => `${pl(n, "pl.class")}: ${a}${a === b ? "" : "–" + b}`, (n, a, b) => `${pl(n, "pl.class")}: ${a}${a === b ? "" : "–" + b}`],
+  ["ex.tickets", "Білети (PDF)", "Tickets (PDF)"],
+  ["ex.answers", "З відповідями (PDF)", "With answers (PDF)"],
+  ["ex.draw", "Витягнути білет", "Draw a ticket"],
+  ["ex.delete", "Видалити", "Delete"],
+  ["ex.sure", "Точно видалити?", "Really delete?"],
+  ["ex.drawn", n => `Білет № ${n}`, n => `Ticket no. ${n}`],
+  ["ex.left", n => n ? `у стосі лишилось ще ${pl(n, "pl.ticket")}` : "це був останній білет", n => n ? `${pl(n, "pl.ticket")} left in the pile` : "that was the last ticket"],
+  ["ex.openTicket", "Відкрити білет", "Open the ticket"],
+  ["ex.openAnswer", "Відповіді до нього", "Its answers"],
+  ["ex.reset", "Перемішати знову", "Shuffle again"],
+  ["ex.deleted", "Набір видалено", "The set was deleted"],
+
+  ["adm.main", "Основна книга", "Main book"],
+  ["adm.intro", "Основна книга — це твоя бібліотека. Доповнення, які користувачі вже прийняли у своїх книгах і дозволили передати далі, Claude порівнює зі сторінками основної книги й готує чернетку злиття. Нічого не змінюється, поки ти не натиснеш «Злити». Усе можна скасувати.",
+    "The main book is your library. Additions that users have already accepted in their own books and agreed to pass on are compared by Claude with the pages of the main book, and Claude prepares a merge draft. Nothing changes until you press “Merge”. Everything can be undone."],
+  ["adm.pause", "Призупинити приймання нових доповнень", "Pause accepting new additions"],
+  ["adm.counts", (p, a, b) => `На розгляді: ${p} · в аналізі: ${a}${b ? ` · заблоковані: ${b}` : ""}`, (p, a, b) => `Pending: ${p} · being analysed: ${a}${b ? ` · blocked: ${b}` : ""}`],
+  ["adm.block", "Заблокувати", "Block"],
+  ["adm.unblock", "Розблокувати", "Unblock"],
+  ["adm.s.new", "чекає аналізу", "waiting for analysis"],
+  ["adm.s.proposed", "на розгляді", "pending"],
+  ["adm.s.skipped", "аналіз: не підходить", "analysis: not suitable"],
+  ["adm.s.merged", "злито", "merged"],
+  ["adm.s.declined", "відхилено", "declined"],
+  ["adm.s.undone", "злиття скасовано", "merge undone"],
+  ["adm.s.failed", "аналіз не вдався", "analysis failed"],
+  ["adm.entry", "запис книги", "book entry"],
+  ["adm.interactive", "інтерактивна сторінка", "interactive page"],
+  ["adm.userSug", "Пропозиція користувача:", "The user's suggestion:"],
+  ["adm.theirs", "Як це вийшло в його книзі:", "How it came out in their book:"],
+  ["adm.analysis", "Аналіз:", "Analysis:"],
+  ["adm.mainPage", "Сторінка основної книги:", "Main book page:"],
+  ["adm.merge", "Злити в основну книгу", "Merge into the main book"],
+  ["adm.decline", "Відхилити", "Decline"],
+  ["adm.undo", "Скасувати злиття", "Undo the merge"],
+  ["adm.reanalyze", "Проаналізувати ще раз", "Analyse again"],
+  ["adm.close", "Закрити", "Close"],
+  ["adm.none", "Доповнень від користувачів поки немає.", "There are no additions from users yet."],
+  ["acc.orPaid", "OpenRouter: оплачено, 1000 на добу", "OpenRouter: paid, 1000 a day"],
+  ["acc.orFree", "OpenRouter: без оплати, 50 на добу", "OpenRouter: not paid, 50 a day"],
+  ["acc.orUnknown", "OpenRouter: невідомо", "OpenRouter: unknown"],
+  ["acc.engClaude", "Claude", "Claude"],
+
+  ["sv.h", "Супервайзор", "Supervisor"],
+  ["sv.intro", "Бот-наглядач на сервері. Кожні 5 хв перевіряє обробник, черги, OpenRouter, диск і сайти. Що може, лагодить сам (завислий обробник, тимчасові збої, застарілі зупинки, ліміт після оплати OpenRouter), решту показує тут. Моделей не викликає, ліміту не витрачає.",
+    "A watchdog bot on the server. Every 5 min it checks the worker, the queues, OpenRouter, the disk and the sites. What it can, it fixes by itself (a hung worker, temporary failures, stale stops, the limit after an OpenRouter payment); the rest is shown here. It calls no model and uses no limit."],
+  ["sv.last", x => `Остання перевірка: ${x}`, x => `Last check: ${x}`],
+  ["sv.run", "Перевірити зараз", "Check now"],
+  ["sv.none", "Подій поки немає", "No events yet"],
+  ["sv.lv.act", "виправив", "fixed"],
+  ["sv.lv.warn", "увага", "attention"],
+  ["sv.lv.info", "інфо", "info"],
+  ["sv.worker", x => `Обробник: ${x}`, x => `Worker: ${x}`],
+  ["sv.w.idle", "простоює", "idle"],
+  ["sv.w.busy", "працює", "busy"],
+  ["sv.w.reset", "скинуто після збою", "reset after a crash"],
+  ["sv.w.killed", "зупинено (завис)", "stopped (hung)"],
+  ["sv.disk", g => `вільно на диску ${g} ГБ`, g => `${g} GB free on the disk`],
+  ["sv.sites", "сайти", "sites"],
+  ["sv.tgOn", "Сповіщення в Telegram увімкнено.", "Telegram alerts are on."],
+  ["sv.tgOff", "Сповіщення в Telegram вимкнено (потрібні SB_TG_TOKEN і SB_TG_CHAT у .env на сервері).", "Telegram alerts are off (SB_TG_TOKEN and SB_TG_CHAT in the server's .env turn them on)."],
+  ["sv.queue", n => `у черзі ${n}`, n => `${n} queued`],
+
+  ["sk.h", "Скіл для моделей", "Skill for the models"],
+  ["sk.intro", "Правила, які отримує кожен виклик моделі в кожного учасника, і новий теж (Claude чи OpenRouter): загальна частина + розділ свого етапу. Opus навчається на реальних результатах і переписує їх, щоб Sonnet і Haiku додавали матеріал якісно. Одна сесія навчання — не більше 20 % 5-годинного вікна твого Claude.",
+    "The rules every model call of every participant gets, new ones included (Claude or OpenRouter): the general part + the section of its pass. Opus learns from real results and rewrites them, so Sonnet and Haiku add material well. One learning session uses at most 20 % of your Claude 5-hour window."],
+  ["sk.auto", "Навчатися автоматично (не частіше ніж раз на 20 год і лише коли накопичились нові приклади)", "Learn automatically (at most every 20 h, and only when new examples have piled up)"],
+  ["sk.learn", "Навчити зараз", "Learn now"],
+  ["sk.queued", "Сесію навчання поставлено в чергу: почнеться, коли обробник звільниться й ліміт дозволить.", "The learning session is queued: it starts when the worker is free and the limit allows."],
+  ["sk.running", "Opus зараз навчається…", "Opus is learning now…"],
+  ["sk.requested", "Чекає на запуск", "Waiting to start"],
+  ["sk.last", (at, r, u, b) => `Остання сесія: ${at}, кроків ${r}, витрачено $${u} з $${b}`, (at, r, u, b) => `Last session: ${at}, ${r} step(s), $${u} of $${b} spent`],
+  ["sk.never", "Ще не навчався", "Has not learned yet"],
+  ["sk.budgetM", b => `Бюджет сесії: $${b} (20 % виміряного 5-годинного вікна)`, b => `Session budget: $${b} (20 % of the measured 5-hour window)`],
+  ["sk.budgetD", b => `Бюджет сесії: $${b} (обережне значення, поки розмір вікна не виміряно)`, b => `Session budget: $${b} (a careful default until the window's size is measured)`],
+  ["sk.evidence", (n, m) => `Нових прикладів і проблем: ${n} (автоматична сесія від ${m})`, (n, m) => `New examples and problems: ${n} (an automatic session needs ${m})`],
+  ["sk.notClaude", "Для навчання потрібен Claude (Opus) у власника книги.", "Learning needs Claude (Opus) on the book owner's account."],
+  ["sk.err", e => `Остання помилка: ${e}`, e => `Last error: ${e}`],
+  ["sk.size", c => `Розмір: ${c} символів`, c => `Size: ${c} characters`],
+  ["sk.view", "Показати скіл", "Show the skill"],
+  ["sk.hist", "Версії", "Versions"],
+  ["sk.rollback", "Повернути цю", "Restore this one"],
+  ["sk.rolled", "Версію повернуто.", "The version was restored."],
+  ["sk.how.opus", "Opus", "Opus"],
+  ["sk.how.rollback", "відкат", "rollback"],
+
+  ["eng.active", "активний", "active"],
+  ["eng.intro", "Обери, чим обробляти твої матеріали: підпискою Claude або моделлю через OpenRouter. Вибір діє тільки для тебе й міняється будь-коли.",
+    "Choose what processes your material: your Claude subscription or a model through OpenRouter. The choice applies only to you and can be changed at any time."],
+  ["claude.intro", "Вхід іде через офіційну сторінку Anthropic. Сайт не бачить і не зберігає твій пароль чи токен: їх зберігає сам Claude Code в окремій папці лише для тебе. Твої матеріали оброблятимуться твоєю підпискою (Pro або Max).",
+    "Sign-in goes through Anthropic's official page. This site never sees or stores your password or token: Claude Code itself keeps them in a separate folder just for you. Your material will be processed with your subscription (Pro or Max)."],
+  ["claude.start", "Почати вхід", "Start sign-in"],
+  ["claude.preparing", "Готую посилання…", "Preparing the link…"],
+  ["claude.cantStart", x => "Не вдалося почати: " + x, x => "Could not start: " + x],
+  ["claude.step1", "Відкрити сторінку входу Anthropic", "Open Anthropic's sign-in page"],
+  ["claude.step2", "Увійди у свій акаунт Claude і натисни «Authorize».", "Sign in to your Claude account and press “Authorize”."],
+  ["claude.step3", "Скопіюй код, який покаже Anthropic, і встав сюди:", "Copy the code Anthropic shows and paste it here:"],
+  ["claude.codePh", "код зі сторінки Anthropic", "code from Anthropic's page"],
+  ["claude.connect", "Підключити", "Connect"],
+  ["claude.checking", "Перевіряю…", "Checking…"],
+  ["claude.ok", e => `Підключено${e ? ": " + e : ""}. Обробка черги почнеться сама.`, e => `Connected${e ? ": " + e : ""}. The queue will start processing by itself.`],
+  ["claude.fail", m => "Не вийшло: " + (m || "невідома помилка"), m => "Failed: " + (m || "unknown error")],
+  ["claude.connectedAs", (e, sub) => `Підключено${e ? `: <strong>${e}</strong>` : ""}${sub ? ` (${sub})` : ""}.`, (e, sub) => `Connected${e ? `: <strong>${e}</strong>` : ""}${sub ? ` (${sub})` : ""}.`],
+  ["claude.usedFor", "Твої завантаження обробляються цією підпискою. Вийти можна будь-коли: облікові дані Claude Code для тебе буде видалено з сервера.",
+    "Your uploads are processed with this subscription. You can sign out at any time: your Claude Code credentials will be deleted from the server."],
+  ["claude.use", "Використовувати Claude", "Use Claude"],
+  ["claude.out", "Вийти з Claude", "Sign out of Claude"],
+  ["claude.re", "Увійти іншим акаунтом", "Sign in with another account"],
+  ["claude.model", "Модель", "Model"],
+  ["claude.effort", "Effort (скільки думати)", "Effort (how much to think)"],
+  ["claude.default", d => `за замовчуванням (${d})`, d => `default (${d})`],
+  ["claude.defaultEffort", "за замовчуванням Claude Code", "Claude Code default"],
+  ["claude.save", "Зберегти", "Save"],
+  ["claude.saved", "Збережено. Діє з наступного виклику Claude; те, що вже працює, доробить зі старими налаштуваннями.",
+    "Saved. It applies from the next Claude call; what is already running finishes with the old settings."],
+  ["claude.settingsTip", "Сильніша модель і вищий effort дають кращий результат, але швидше витрачають ліміти підписки. Якщо модель недоступна на твоєму плані, обробка покаже помилку: тоді обери іншу.",
+    "A stronger model and higher effort give better results but use up the subscription limits faster. If a model is not available on your plan, processing shows an error: then choose another one."],
+
+  ["or.intro", "OpenRouter — платний сервіс, який дає багато моделей за одним ключем. Матеріали оброблятимуться за твій рахунок на OpenRouter. Ключ лежить на сервері лише для тебе, сайт ніколи не показує його назад. Створи ключ на <a href=\"https://openrouter.ai/keys\" target=\"_blank\" rel=\"noopener\">openrouter.ai/keys</a> і обмеж у ньому ліміт витрат.",
+    "OpenRouter is a paid service that gives access to many models with one key. Your material will be processed at your own expense on OpenRouter. The key stays on the server just for you and the site never shows it back. Create a key at <a href=\"https://openrouter.ai/keys\" target=\"_blank\" rel=\"noopener\">openrouter.ai/keys</a> and set a spending limit on it."],
+  ["or.key", "Ключ", "Key"],
+  ["or.saved", "Збережено:", "Saved:"],
+  ["or.remove", "Видалити ключ", "Remove the key"],
+  ["or.newKeyPh", "новий ключ, щоб замінити", "new key to replace it"],
+  ["or.saveKey", "Перевірити й зберегти", "Check and save"],
+  ["or.model", "Модель", "Model"],
+  ["or.modelPh", "почни вводити: claude, gemini, gpt…", "start typing: claude, gemini, gpt…"],
+  ["or.autoBtn", "Автоматично: усі безкоштовні моделі", "Automatic: all free models"],
+  ["or.autoOpt", "Автоматично: усі безкоштовні", "Automatic: all free"],
+  ["or.hint", "Показано моделі, які вміють викликати інструменти (потрібно для роботи з файлами).", "Models that can call tools are listed (required for working with files)."],
+  ["or.autoInfo", "Автоматично: від найкращої безкоштовної моделі до наступної, коли в поточної вичерпано ліміт.", "Automatic: from the best free model to the next one when the current one runs out of its limit."],
+  ["or.vision", "бачить зображення", "sees images"],
+  ["or.noVision", "НЕ бачить зображень: підійде для вижимок, пояснень і пропозицій, але не для фото чи PDF-сторінок",
+    "does NOT see images: fine for summaries, explanations and suggestions, but not for photos or PDF pages"],
+  ["or.price", (i, o) => `за 1M токенів: вхід ${i}, вихід ${o}`, (i, o) => `per 1M tokens: input ${i}, output ${o}`],
+  ["or.ctx", "контекст", "context"],
+  ["or.useSave", "Зберегти модель", "Save the model"],
+  ["or.use", "Використовувати OpenRouter", "Use OpenRouter"],
+  ["or.needKey", "Встав ключ", "Paste the key"],
+  ["or.checkingKey", "Перевіряю ключ на OpenRouter…", "Checking the key with OpenRouter…"],
+  ["or.keyOk", (label, rem) => `Ключ прийнято${label ? " («" + label + "»)" : ""}${rem != null ? ", залишок ліміту $" + rem : ""}.`,
+    (label, rem) => `Key accepted${label ? " (“" + label + "”)" : ""}${rem != null ? ", $" + rem + " of the limit left" : ""}.`],
+  ["or.keyRemoved", "Ключ видалено з сервера.", "The key was removed from the server."],
+  ["or.keyFirst", "Спершу збережи ключ", "Save the key first"],
+  ["or.pickModel", "Обери модель", "Choose a model"],
+  ["or.modelSaved", "Модель збережено.", "The model was saved."],
+  ["or.nowUsing", "Тепер твої матеріали обробляє OpenRouter.", "OpenRouter now processes your material."],
+
+  ["free.intro", "Моделі пробуються зверху вниз. Коли в моделі вичерпано ліміт або вона не впоралась, береться наступна, навіть посеред завдання. Модель на паузі пропускається до кінця паузи. Для завдань із фото беруться лише моделі зі зором (👁).",
+    "Models are tried from top to bottom. When a model runs out of its limit or fails, the next one takes over, even in the middle of a task. A paused model is skipped until its pause ends. Tasks with photos only use models that can see images (👁)."],
+  ["free.allPaused", hm => `Добовий ліміт безкоштовних запитів вичерпано, відновиться о ${hm}.`, hm => `The daily limit of free requests is used up; it resets at ${hm}.`],
+  ["free.reset", "Зняти паузу", "Lift the pause"],
+  ["free.today", (u, cap) => `Сьогодні запитів: ${u}${cap ? " з " + cap : " (ліміт невідомий: 50 на добу, або 1000, якщо коли-небудь поповнено від $10)"}.`,
+    (u, cap) => `Requests today: ${u}${cap ? " of " + cap : " (limit unknown: 50 a day, or 1000 if you have ever topped up $10 or more)"}.`],
+  ["free.paid", "Рахунок OpenRouter поповнено: 1000 безкоштовних запитів на добу.", "OpenRouter credits were bought: 1000 free requests a day."],
+  ["free.unpaid", "Рахунок OpenRouter не поповнювали: 50 безкоштовних запитів на добу (1000 після поповнення від $10; сайт перевіряє це сам).",
+    "No OpenRouter credits bought: 50 free requests a day (1000 after topping up $10 or more; the site checks this by itself)."],
+  ["usage.orPaid", "оплачено", "paid"],
+  ["free.src.benchmark", "за бенчмарком", "by benchmark"],
+  ["free.src.size", "оцінка за розміром", "estimated from size"],
+  ["free.src.unknown", "невідомо", "unknown"],
+  ["free.pause", hm => `пауза до ${hm}`, hm => `paused until ${hm}`],
+  ["free.save", "Зберегти порядок і вибір", "Save the order and selection"],
+  ["free.saved", "Збережено.", "Saved."],
+  ["free.warn", "Про що треба знати: безкоштовні моделі слабші за платні й частіше помиляються, особливо з рукописними фото. Результат перевіряється автоматично, збої повторюються. Ліміти OpenRouter для безкоштовних: 20 запитів за хвилину й 50 на добу (1000, якщо коли-небудь поповнено від $10). Одне завантаження робить багато запитів, тож 50 на добу вистачить ненадовго. Умови зберігання й використання даних у безкоштовних провайдерів визначають вони самі, тому не надсилай нічого конфіденційного.",
+    "Good to know: free models are weaker than paid ones and make more mistakes, especially with handwritten photos. The result is checked automatically and failures are retried. OpenRouter limits for free models: 20 requests a minute and 50 a day (1000 if you have ever topped up $10 or more). One upload makes many requests, so 50 a day will not last long. The terms for storing and using data at free providers are theirs, so do not send anything confidential."],
+];
+/*D-END*/
+D.forEach(([k, uk, en]) => { T.uk[k] = uk; T.en[k] = en; });
+function t(key, ...a) {
+  const v = T[LANG][key] ?? T.uk[key] ?? key;
+  return typeof v === "function" ? v(...a) : v;
+}
+function pl(n, key) {            // "3 entries" in the current language
+  const f = t(key);
+  if (LANG === "uk") { const m10 = n % 10, m100 = n % 100;
+    return n + " " + (m10 === 1 && m100 !== 11 ? f[0] : m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20) ? f[1] : f[2]); }
+  return n + " " + (n === 1 ? f[0] : f[1]);
+}
+const loc = () => LANG === "uk" ? "uk-UA" : "en-GB";
+function applyStatic() {
+  document.documentElement.lang = LANG;
+  document.title = t("app.title");
+  document.querySelectorAll("[data-i18n]").forEach(e => e.textContent = t(e.dataset.i18n));
+  buildPoster();
+  document.querySelectorAll("[data-i18n-html]").forEach(e => e.innerHTML = t(e.dataset.i18nHtml));
+  document.querySelectorAll("[data-i18n-ph]").forEach(e => e.placeholder = t(e.dataset.i18nPh));
+  document.querySelectorAll("[data-i18n-label]").forEach(e => e.setAttribute("aria-label", t(e.dataset.i18nLabel)));
+  document.querySelectorAll("[data-lang]").forEach(b => b.classList.toggle("on", b.dataset.lang === LANG));
+  paintTheme();
+}
+// the button shows where a press leads: a sun while the page is dark, a moon while it is light
+function paintTheme() {
+  document.documentElement.dataset.theme = THEME;
+  const b = $("#themeBtn"), label = t(THEME === "light" ? "theme.toDark" : "theme.toLight");
+  b.textContent = THEME === "light" ? "☾" : "☀";
+  b.title = label; b.setAttribute("aria-label", label);
+}
+// every request tells the server which language the person reads (error texts, Claude's replies, notes)
+const _fetch = window.fetch.bind(window);
+// a stranger reads the main book; the first request that would change something answers 401 and opens the sign-up window
+window.fetch = async (u, o = {}) => {
+  const r = await _fetch(u, {...o, headers: {...(o.headers || {}), "X-Lang": LANG}});
+  if (r.status === 401 && !/^\/api\/(auth\/|status)/.test(String(u))) openAuth();
+  return r;
+};
+// the poster: the short name, one letter per inked square; the squares, where the letter sits in them (cut by the
+// edges on purpose) and which part of the ink texture they show, are fixed so the composition does not jump
+const CELLS = [
+  {c: 1, r: 1, x: "-6%", y: "-3%", bp: "-40px -90px"},
+  {c: 2, r: 1, x: "14%", y: "-14%", bp: "-300px -60px"},
+  {c: 4, r: 1, x: "-34%", y: "10%", bp: "-520px -380px", part: "38%"},
+  {c: 2, r: 2, x: "4%", y: "18%", bp: "-160px -440px"},
+  {c: 3, r: 2, x: "-12%", y: "-20%", bp: "-420px -150px"},
+  {c: 1, r: 3, x: "8%", y: "-48%", bp: "-60px -560px", part: "0%"},
+  {c: 3, r: 3, x: "-20%", y: "6%", bp: "-560px -580px"},
+];
+function buildPoster() {
+  const letters = [...t("app.short")].slice(0, CELLS.length), g = $("#pgrid"), out = [];
+  letters.forEach((ch, i) => {
+    const k = CELLS[i], d = document.createElement("div"), b = document.createElement("b");
+    d.className = "cell" + (k.part ? " part" : "");
+    d.style.cssText = `grid-column:${k.c};grid-row:${k.r};--x:${k.x};--y:${k.y};--bp:${k.bp}` + (k.part ? `;--cut:${k.part}` : "");
+    b.textContent = ch;
+    d.append(document.createElement("canvas"), b);
+    d._ink = {bp: k.bp.split(" ").map(v => -parseFloat(v)), cut: parseFloat(k.part || "0") / 100};
+    out.push(d);
+  });
+  const note = document.createElement("div"), p1 = document.createElement("p"), p2 = document.createElement("p");
+  note.className = "pnote";
+  note.style.cssText = `grid-column:${letters.length > 3 ? 4 : 3};grid-row:2`;
+  p1.className = "pfull"; p1.textContent = t("app.title");
+  p2.textContent = t("app.tag");
+  note.append(p1, p2);
+  out.push(note);
+  g.replaceChildren(...out);
+  drawCells();
+}
+
+/* ---------- textures: procedural, made in the browser (nothing is downloaded) and never tiled ----------
+   A hidden mask decides only how strong the grain is at each point: for the page a softened Voronoi mixed with soft
+   clouds, for paper and ink clouds plus long thin fibres. The grain is zero-mean around the base colour and does not
+   clip, so the mask itself stays invisible: only the noise breathes with it. Drawn straight into canvases (no image
+   encoding). A WebGL version was tried on 2026-10-26 and was slower here (context + shader compile ~260 ms against
+   ~150 ms for all three textures on the CPU), so the CPU does it. */
+function rng(seed) { let s = seed >>> 0 || 1; return () => ((s ^= s << 13, s ^= s >>> 17, s ^= s << 5) >>> 0) / 4294967296; }
+function paperField(w, h, r) {
+  // [cell width, cell height, weight]: big blotches, medium clouds, long thin horizontal fibres
+  const scales = [[260, 260, 1], [90, 90, .6], [70, 3, .45], [18, 18, .25]], out = new Float32Array(w * h);
+  let total = 0;
+  for (const [sx, sy, wt] of scales) {
+    const gw = Math.ceil(w / sx) + 2, gh = Math.ceil(h / sy) + 2, gr = new Float32Array(gw * gh);
+    for (let i = 0; i < gr.length; i++) gr[i] = r();
+    for (let y = 0; y < h; y++) {
+      const fy = y / sy, iy = fy | 0, ty = fy - iy, vy = ty * ty * (3 - 2 * ty), row = y * w;
+      for (let x = 0; x < w; x++) {
+        const fx = x / sx, ix = fx | 0, tx = fx - ix, vx = tx * tx * (3 - 2 * tx), k = iy * gw + ix;
+        const a = gr[k] + (gr[k + 1] - gr[k]) * vx, c = gr[k + gw] + (gr[k + gw + 1] - gr[k + gw]) * vx;
+        out[row + x] += (a + (c - a) * vy) * wt;
+      }
+    }
+    total += wt;
+  }
+  let lo = 1, hi = 0;
+  for (let i = 0; i < out.length; i++) { out[i] /= total; if (out[i] < lo) lo = out[i]; if (out[i] > hi) hi = out[i]; }
+  const span = hi - lo || 1;
+  for (let i = 0; i < out.length; i++) out[i] = (out[i] - lo) / span;
+  return out;
+}
+// softened Voronoi: a smooth minimum of the distances to jittered points (no hard cell edges), 0..1
+function voronoiField(w, h, cell, r) {
+  const gw = Math.ceil(w / cell) + 3, gh = Math.ceil(h / cell) + 3, px = new Float32Array(gw * gh), py = new Float32Array(gw * gh);
+  for (let i = 0; i < px.length; i++) { px[i] = r(); py[i] = r(); }
+  const out = new Float32Array(w * h), K = 6;            // K: how soft the borders are (lower = softer)
+  let lo = Infinity, hi = -Infinity;
+  for (let y = 0; y < h; y++) {
+    const gy = y / cell, cy = gy | 0;
+    for (let x = 0; x < w; x++) {
+      const gx = x / cell, cx = gx | 0;
+      let acc = 0;
+      for (let j = 0; j <= 2; j++) for (let i = 0; i <= 2; i++) {
+        const k = (cy + j) * gw + cx + i, dx = cx + i - 1 + px[k] - gx, dy = cy + j - 1 + py[k] - gy;
+        acc += Math.exp(-K * Math.sqrt(dx * dx + dy * dy));
+      }
+      const v = -Math.log(acc) / K;
+      out[y * w + x] = v; if (v < lo) lo = v; if (v > hi) hi = v;
+    }
+  }
+  const span = hi - lo || 1;
+  for (let i = 0; i < out.length; i++) out[i] = (out[i] - lo) / span;
+  return out;
+}
+// the page background mask: mostly the softened Voronoi, a little of the paper clouds mixed in
+function voronoiMix(w, h, r) {
+  const v = voronoiField(w, h, 60, r), f = paperField(w, h, r);   // quarter resolution: 60 here = 240 px cells
+  for (let i = 0; i < v.length; i++) v[i] = .72 * v[i] + .28 * f[i];
+  return v;
+}
+// grain on `base` whose amplitude follows a hidden mask field, computed at 1/2^shift resolution (it is soft anyway)
+function grain(cv, w, h, base, lo, hi, seed, mask = paperField, shift = 1) {
+  const r = rng(seed), q = (1 << shift) - 1, fw = (w + q) >> shift, f = mask(fw, (h + q) >> shift, r);
+  cv.width = w; cv.height = h;
+  const ctx = cv.getContext("2d"), img = ctx.createImageData(w, h), d = img.data;
+  for (let y = 0, i = 0; y < h; y++) {
+    const row = (y >> shift) * fw;
+    for (let x = 0; x < w; x++, i += 4) {
+      const v = f[row + (x >> shift)], amp = lo + (hi - lo) * v * v, n = base + (2 * r() - 1) * amp;
+      d[i] = d[i + 1] = d[i + 2] = n; d[i + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  return ctx;
+}
+function cpuGrain(w, h, base, lo, hi, seed, mode) {
+  const cv = document.createElement("canvas");
+  grain(cv, w, h, base, lo, hi, seed, mode ? paperField : voronoiMix, mode ? 1 : 2);
+  return cv;
+}
+// mode 0: the page (softened Voronoi mask), 1: paper and ink (clouds and fibres)
+const makeGrain = (w, h, base, lo, hi, seed, mode) => cpuGrain(w, h, base, lo, hi, seed, mode);
+const DPR = () => Math.min(window.devicePixelRatio || 1, 2);
+function blit(target, src) { target.width = src.width; target.height = src.height; target.getContext("2d").drawImage(src, 0, 0); }
+
+let bgSize = [0, 0];
+function paintBackground() {
+  const dpr = DPR(), cv = $("#bg");
+  let w = Math.ceil(innerWidth * dpr), h = Math.ceil(Math.max(innerHeight, screen.height || 0) * dpr);
+  const k = Math.min(1, Math.sqrt(3.2e6 / (w * h)));    // a 4K screen gets slightly bigger grain, not a slow page
+  w = Math.ceil(w * k); h = Math.ceil(h * k);
+  if (w <= bgSize[0] * 1.1 && h <= bgSize[1] * 1.1) return;
+  bgSize = [w, h];
+  // light but visible grain; never past the base, so nothing clips and the Voronoi mask itself stays invisible
+  blit(cv, THEME === "light" ? makeGrain(w, h, 236, 3, 12, 7, 0) : makeGrain(w, h, 19, 3, 18, 7, 0));
+}
+let inkCanvas = null, inkScale = 1;
+function makeInk() {
+  const dpr = DPR(), n = Math.round(720 * dpr), cv = makeGrain(n, n, 30, 8, 44, 11, 1), ctx = cv.getContext("2d"), r = rng(23);
+  ctx.scale(dpr, dpr);
+  // the ink is uneven, as printed: lighter clouds, a few scratches, some horizontal banding
+  const f = paperField(90, 90, r);
+  for (let y = 0; y < 90; y++) for (let x = 0; x < 90; x++) {
+    const v = f[y * 90 + x];
+    if (v > .55) { ctx.fillStyle = `rgba(185,188,191,${((v - .5) * .55).toFixed(3)})`; ctx.fillRect(x * 8, y * 8, 8, 8); }
+  }
+  ctx.lineWidth = 1;
+  for (let i = 0; i < 70; i++) {
+    const x = r() * 720, y = r() * 720, a = r() * Math.PI, l = 10 + r() * 70;
+    ctx.strokeStyle = `rgba(205,205,205,${(.12 + r() * .3).toFixed(3)})`;
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.quadraticCurveTo(x + l * .5 * Math.cos(a + .4), y + l * .5 * Math.sin(a + .4), x + l * Math.cos(a), y + l * Math.sin(a)); ctx.stroke();
+  }
+  for (let i = 0; i < 18; i++) { ctx.fillStyle = `rgba(170,170,170,${(.05 + r() * .12).toFixed(3)})`; ctx.fillRect(0, r() * 720, 720, 1 + r() * 2); }
+  inkCanvas = cv; inkScale = dpr;
+}
+// every square shows its own part of the one ink canvas (--bp in the CELLS table), cut where the square is cut
+function drawCells() {
+  if (!inkCanvas) return;
+  const dpr = DPR();
+  document.querySelectorAll("#pgrid .cell").forEach(cell => {
+    const cv = cell.querySelector("canvas"), w = cell.clientWidth, h = cell.clientHeight * (1 - cell._ink.cut);
+    if (!w || h <= 0) return;
+    cv.width = Math.ceil(w * dpr); cv.height = Math.ceil(h * dpr);
+    const [bx, by] = cell._ink.bp, sy = by + cell.clientHeight * cell._ink.cut;
+    cv.getContext("2d").drawImage(inkCanvas, bx * inkScale, sy * inkScale, w * inkScale, h * inkScale, 0, 0, cv.width, cv.height);
+  });
+}
+let paperSize = [0, 0];
+function paintPaper() {
+  const el = document.querySelector(".poster"), dpr = DPR();
+  const w = Math.ceil(el.clientWidth * dpr), h = Math.ceil(el.clientHeight * dpr);
+  if (!w || !h || (Math.abs(w - paperSize[0]) < paperSize[0] * .15 && Math.abs(h - paperSize[1]) < paperSize[1] * .15)) return;
+  paperSize = [w, h];
+  let cv = el.querySelector(":scope > canvas");
+  if (!cv) { cv = document.createElement("canvas"); el.prepend(cv); }
+  blit(cv, makeGrain(w, h, 186, 4, 20, 5, 1));
+}
+// each texture in its own idle slot: on a slow phone none of them blocks the page for long
+const idle = () => new Promise(res => (window.requestIdleCallback || (f => setTimeout(f, 30)))(res, {timeout: 700}));
+async function paintTextures() {
+  await idle(); paintBackground();
+  await idle(); makeInk(); drawCells();
+  await idle(); paintPaper();
+}
+let _rs = 0;
+addEventListener("resize", () => { clearTimeout(_rs); _rs = setTimeout(() => { paintBackground(); paintPaper(); drawCells(); }, 300); });
+paintTextures();
+$("#themeBtn").onclick = () => {
+  THEME = THEME === "light" ? "dark" : "light";
+  try { localStorage.setItem("theme", THEME); } catch (e) {}
+  paintTheme();
+  bgSize = [0, 0]; paintBackground();          // the page grain is drawn once per theme (about 100 ms)
+};
+
+function setLang(l) {
+  if (l === LANG) return;
+  LANG = l;
+  try { localStorage.setItem("lang", l); } catch (e) {}
+  applyStatic(); renderFiles();
+  if ($("#auth").open) applyAuthMode();
+  if (S) render();
+  if (M) renderAdmin();
+  if (dlg.open) renderDlg();
+  refresh();                     // the server's own texts come in the new language
+}
+document.querySelectorAll("[data-lang]").forEach(b => b.onclick = () => setLang(b.dataset.lang));
+
+function fmt(iso) {
+  if (!iso) return "";
+  return new Date(iso).toLocaleString(loc(), {day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit"});
+}
+function mb(b) { return (b / 1048576).toFixed(b > 10485760 ? 0 : 1) + " " + t("unit.mb"); }
+
+document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("nav button").forEach(x => x.classList.toggle("on", x === b));
+  document.querySelectorAll("section.tab").forEach(x => x.classList.toggle("on", x.id === "tab-" + b.dataset.tab));
+  try { localStorage.setItem("tab", b.dataset.tab); } catch (e) {}
+});
+try { const tb = localStorage.getItem("tab"); if (tb) document.querySelector(`nav button[data-tab=${tb}]`)?.click(); } catch (e) {}
+
+/* ---------- picking files ---------- */
+const drop = $("#drop");
+drop.onclick = () => $("#pick").click();
+$("#camBtn").onclick = () => $("#cam").click();
+$("#pick").onchange = e => { addFiles(e.target.files); e.target.value = ""; };
+$("#cam").onchange = e => { addFiles(e.target.files); e.target.value = ""; };
+["dragenter", "dragover"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", e => addFiles(e.dataTransfer.files));
+document.addEventListener("paste", e => { if (e.clipboardData?.files?.length) addFiles(e.clipboardData.files); });
+
+function addFiles(list) { for (const f of list) picked.push(f); renderFiles(); }
+function renderFiles() {
+  const box = $("#files"); box.innerHTML = "";
+  picked.forEach((f, i) => {
+    const d = document.createElement("div"); d.className = "file";
+    if (f.type.startsWith("image/")) { const im = document.createElement("img"); im.src = URL.createObjectURL(f); d.appendChild(im); }
+    else d.appendChild(document.createTextNode(f.name));
+    d.insertAdjacentHTML("beforeend", `<span class="n">${i + 1}</span>`);
+    const x = document.createElement("button"); x.textContent = "×"; x.title = t("add.remove");
+    x.onclick = () => { picked.splice(i, 1); renderFiles(); }; d.appendChild(x);
+    box.appendChild(d);
+  });
+  const total = picked.reduce((a, f) => a + f.size, 0);
+  $("#count").textContent = picked.length ? t("add.count", picked.length, mb(total)) : "";
+  $("#send").disabled = !picked.length && !($("#pcode")?.value || "").trim();
+}
+
+const uploadKind = () => document.querySelector("input[name=kind]:checked").value;
+document.querySelectorAll("input[name=kind]").forEach(r => r.onchange = fillUpload);
+$("#subject").onchange = fillUpload;
+$("#utopic").onchange = () => { $("#utopicNew").hidden = $("#utopic").value !== "__new"; };
+const pad2 = n => String(n).padStart(2, "0");
+const today = () => { const d = new Date(); return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; };
+// "Wed, 14 October 2026" for an ISO day (noon avoids any time-zone shift)
+const fmtDayLong = iso => new Date(iso + "T12:00:00").toLocaleDateString(loc(), {weekday: "short", day: "numeric", month: "long", year: "numeric"});
+const fmtDay = iso => new Date(iso + "T12:00:00").toLocaleDateString(loc(), {day: "2-digit", month: "2-digit", year: "numeric"});
+$("#udate").onchange = () => fillUpload();
+$("#pcode").oninput = () => renderFiles();
+function fillUpload() {
+  const asis = uploadKind() === "asis", ref = uploadKind() === "reference";
+  $("#asisHint").hidden = $("#asisBox").hidden = !asis;
+  $("#codeBox").hidden = uploadKind() !== "notes";
+  $("#dateBox").hidden = ref;
+  $("#udate").max = today();
+  if (!$("#udate").value) $("#udate").value = today();
+  if (!S) return;
+  const day = $("#udate").value, sid = $("#subject").value;
+  const have = S.subjects.filter(s => !sid || s.id === sid).reduce((n, s) => n + (s.days.find(d => d.date === day)?.entries.length || 0), 0);
+  setText($("#dateHint"), day ? (have ? t("add.dayHas", have) : t("add.dayNew")) : "", have ? "msg ok small" : "muted small");
+  const subjOpts = S.subjects.map(s => `<option value="${esc(s.id)}">${esc(s.title)}</option>`).join("");
+  setOptions($("#subject"), (asis ? `<option value="">${esc(t("add.pickSubject"))}</option>` : `<option value="">${esc(t("add.auto"))}</option>`) + subjOpts);
+  const s = S.subjects.find(x => x.id === $("#subject").value);
+  setOptions($("#utopic"), `<option value="">${esc(t("add.topicDefault"))}</option>` +
+    (s?.topics || []).map(tp => `<option value="${esc(tp.id)}">${esc(tp.title)}${tp.entries ? ` (${tp.entries})` : ""}</option>`).join("") +
+    `<option value="__new">${esc(t("add.topicNew"))}</option>`);
+  $("#utopicNew").hidden = !asis || $("#utopic").value !== "__new";
+}
+
+// A phone photo is 4-8 MB; the server shrinks pages to 1800 px anyway, so send them at 2400 px (Cloudflare caps a request at 100 MB)
+async function shrinkImage(f) {
+  if (!f.type.startsWith("image/") || /\.hei[cf]$/i.test(f.name) || f.size < 700 * 1024) return f;
+  try {
+    const bmp = await createImageBitmap(f, {imageOrientation: "from-image"});
+    const k = Math.min(1, 2400 / Math.max(bmp.width, bmp.height));
+    const cv = document.createElement("canvas");
+    cv.width = Math.round(bmp.width * k); cv.height = Math.round(bmp.height * k);
+    cv.getContext("2d").drawImage(bmp, 0, 0, cv.width, cv.height);
+    const blob = await new Promise(r => cv.toBlob(r, "image/jpeg", 0.88));
+    if (!blob || blob.size >= f.size) return f;
+    return new File([blob], f.name.replace(/\.[^.]+$/, "") + ".jpg", {type: "image/jpeg"});
+  } catch (e) { return f; }
+}
+
+$("#send").onclick = async () => {
+  const kind = uploadKind(), msg0 = $("#sendMsg");
+  if (kind !== "reference" && !$("#udate").value) { msg0.textContent = t("add.needDate"); msg0.className = "msg bad"; return; }
+  if (kind === "asis") {
+    const bad = !$("#subject").value ? t("add.needSubject") : picked.some(f => !/\.pdf$/i.test(f.name)) ? t("add.pdfOnly") :
+      ($("#utopic").value === "__new" && !$("#utopicNew").value.trim()) ? t("add.needTopic") : "";
+    if (bad) { msg0.textContent = bad; msg0.className = "msg bad"; return; }
+  }
+  let files = picked;
+  if (S?.public) {
+    $("#send").disabled = true;
+    files = await Promise.all(picked.map(shrinkImage));
+    const cfg = await authConfig(), total = files.reduce((a, f) => a + f.size, 0);
+    if (cfg.max_upload && total > cfg.max_upload) {
+      msg0.textContent = t("add.tooBig", Math.floor(cfg.max_upload / 1048576)); msg0.className = "msg bad";
+      $("#send").disabled = false; return;
+    }
+  }
+  const fd = new FormData();
+  files.forEach(f => fd.append("files", f, f.name));
+  fd.append("note", $("#note").value);
+  fd.append("subject", $("#subject").value);
+  fd.append("kind", kind);
+  if (kind === "notes" && $("#pcode").value.trim()) fd.append("code", $("#pcode").value);
+  if (kind !== "reference") fd.append("date", $("#udate").value);
+  if (kind === "asis") {
+    const tp = $("#utopic").value;
+    if (tp === "__new") fd.append("topic_title", $("#utopicNew").value.trim()); else fd.append("topic", tp);
+  }
+  const xhr = new XMLHttpRequest(), bar = $("#bar"), msg = $("#sendMsg");
+  xhr.open("POST", "/api/upload");
+  xhr.setRequestHeader("X-Lang", LANG);
+  bar.style.display = "block"; msg.textContent = ""; msg.className = "msg"; $("#send").disabled = true;
+  xhr.upload.onprogress = e => { if (e.lengthComputable) bar.firstElementChild.style.width = (100 * e.loaded / e.total) + "%"; };
+  xhr.onload = () => {
+    bar.style.display = "none"; bar.firstElementChild.style.width = 0;
+    if (xhr.status === 401) { $("#send").disabled = false; openAuth(); return; }
+    if (xhr.status === 200) {
+      let j = {}; try { j = JSON.parse(xhr.responseText); } catch (e) {}
+      msg.textContent = t("add.sent") + (j.interactive ? " " + t("add.iqueued", j.interactive) : "") +
+        (j.skipped?.length ? " " + t("add.dupes", j.skipped.join(", ")) : "") +
+        (j.skipped_by?.length ? " " + t("add.dupesBy", [...new Set(j.skipped_by.map(x => x.by))].join(", ")) : "");
+      msg.className = "msg ok"; picked = []; $("#note").value = ""; $("#pcode").value = ""; $("#udate").value = today(); renderFiles(); refresh();
+    } else {
+      let d = xhr.responseText || xhr.status; try { d = JSON.parse(xhr.responseText).detail || d; } catch (e) {}
+      msg.textContent = t("add.error", d); msg.className = "msg bad"; $("#send").disabled = false;
+    }
+  };
+  xhr.onerror = () => { bar.style.display = "none"; msg.textContent = t("add.noConn"); msg.className = "msg bad"; $("#send").disabled = false; };
+  xhr.send(fd);
+};
+
+/* ---------- updating the page without disturbing the person ---------- */
+// The status refresh runs every 5 s: touch the DOM only where something really changed,
+// never rebuild a select that is in use, and keep <details> open/closed as the person left them.
+function setHTML(el, html) {
+  if (el._html === html) return;
+  if (el.contains(document.activeElement) && document.activeElement.matches("input, select, textarea")) return;  // next tick
+  const open = {};
+  el.querySelectorAll("details[data-k]").forEach(d => open[d.dataset.k] = d.open);
+  el.innerHTML = html; el._html = html;
+  el.querySelectorAll("details[data-k]").forEach(d => { if (d.dataset.k in open) d.open = open[d.dataset.k]; });
+}
+function setOptions(sel, html) {
+  if (sel._html === html || document.activeElement === sel) return;
+  const v = sel.value;
+  sel.innerHTML = html; sel._html = html;
+  if ([...sel.options].some(o => o.value === v)) sel.value = v;
+}
+function setText(el, text, cls) {
+  if (el.textContent !== text) el.textContent = text;
+  if (cls !== undefined && el.className !== cls) el.className = cls;
+}
+
+/* ---------- requests ---------- */
+$("#rsubject").onchange = fillTopics;
+function fillTopics() {
+  const s = S?.subjects.find(x => x.id === $("#rsubject").value);
+  setOptions($("#rtopic"), `<option value="">${esc(t("add.auto"))}</option>` +
+    (s?.topics || []).map(tp => `<option value="${esc(tp.id)}">${esc(tp.title)}${tp.entries ? ` (${tp.entries})` : ""}</option>`).join(""));
+}
+$("#rsend").onclick = async () => {
+  const msg = $("#rmsg"), text = $("#rtext").value.trim();
+  if (!text) { msg.textContent = t("req.empty"); msg.className = "msg bad"; return; }
+  const r = await fetch("/api/request", {method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({kind: document.querySelector("input[name=rkind]:checked").value,
+      subject: $("#rsubject").value, topic: $("#rtopic").value, text})});
+  if (r.ok) { msg.textContent = t("req.queued"); msg.className = "msg ok"; $("#rtext").value = ""; refresh(); }
+  else { msg.textContent = t("add.error", await r.text()); msg.className = "msg bad"; }
+};
+
+/* ---------- engine: Claude Code or OpenRouter (each person chooses) ---------- */
+const dlg = $("#dlg"), body = $("#dlgBody"), eb = () => $("#engBody");
+let dtab = "claude", orModels = null;
+$("#claudeBtn").onclick = () => { dtab = S?.engine?.name || "claude"; renderDlg(); dlg.showModal(); };
+function renderDlg() {
+  const act = S.engine?.name, tick = n => act === n ? ` <span class="tag ok">${esc(t("eng.active"))}</span>` : "";
+  body.innerHTML = `<div class="seg"><label><input type="radio" name="dt" value="claude" ${dtab === "claude" ? "checked" : ""}><span>Claude</span></label>
+      <label><input type="radio" name="dt" value="openrouter" ${dtab === "openrouter" ? "checked" : ""}><span>OpenRouter</span></label></div>${tick(dtab)}
+    <p class="small muted" style="margin-top:10px">${esc(t("eng.intro"))}</p>
+    <div id="engBody"></div>`;
+  body.querySelectorAll("input[name=dt]").forEach(r => r.onchange = () => { dtab = r.value; renderDlg(); });
+  if (dtab === "claude") S.claude?.loggedIn ? showConnected() : showStart(); else showOpenRouter();
+}
+async function useEngine(engine, model) {
+  const r = await fetch("/api/engine", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({engine, model})});
+  await refresh();
+  return r.ok ? {ok: true} : {ok: false, message: await r.text().then(x => { try { return JSON.parse(x).detail; } catch (e) { return x; } })};
+}
+function showStart(err) {
+  eb().innerHTML = `<p class="small">${esc(t("claude.intro"))}</p>
+    ${err ? `<p class="msg bad">${esc(err)}</p>` : ""}
+    <button class="btn primary" id="lgStart">${esc(t("claude.start"))}</button>`;
+  $("#lgStart").onclick = startLogin;
+}
+async function startLogin() {
+  eb().innerHTML = `<p class="muted">${esc(t("claude.preparing"))}</p>`;
+  const r = await fetch("/api/claude/login", {method: "POST"});
+  if (!r.ok) return showStart(t("claude.cantStart", await r.text()));
+  const {url} = await r.json();
+  eb().innerHTML = `<ol>
+      <li><a class="btn primary" href="${esc(url)}" target="_blank" rel="noopener">${esc(t("claude.step1"))}</a></li>
+      <li>${esc(t("claude.step2"))}</li>
+      <li>${esc(t("claude.step3"))}</li></ol>
+    <input type="text" id="lgCode" placeholder="${esc(t("claude.codePh"))}" autocomplete="off">
+    <div class="row" style="margin-top:12px"><button class="btn primary" id="lgSend">${esc(t("claude.connect"))}</button></div>
+    <div class="msg" id="lgMsg"></div>`;
+  $("#lgSend").onclick = async () => {
+    const code = $("#lgCode").value.trim(), msg = $("#lgMsg");
+    if (!code) return;
+    $("#lgSend").disabled = true; msg.textContent = t("claude.checking"); msg.className = "msg";
+    const r = await fetch("/api/claude/code", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({code})});
+    const j = r.ok ? await r.json() : {ok: false, message: await r.text()};
+    if (j.ok) { await useEngine("claude"); renderDlg(); $("#engBody").insertAdjacentHTML("beforeend", `<div class="msg ok">${esc(t("claude.ok", j.email))}</div>`); }
+    else { msg.textContent = t("claude.fail", j.message); msg.className = "msg bad"; $("#lgSend").disabled = false; }
+  };
+}
+function showConnected() {
+  const c = S.claude, active = S.engine?.name === "claude", C = S.engine?.claude || {};
+  eb().innerHTML = `<p>${t("claude.connectedAs", c.email ? esc(c.email) : "", c.subscription ? esc(c.subscription) : "")}</p>
+    <p class="small muted">${esc(t("claude.usedFor"))}</p>
+    <div class="row">${active ? "" : `<button class="btn primary" id="lgUse">${esc(t("claude.use"))}</button>`}
+      <button class="btn" id="lgOut">${esc(t("claude.out"))}</button><button class="btn" id="lgRe">${esc(t("claude.re"))}</button></div>
+    <div class="msg" id="lgMsg"></div>
+    <div class="row" style="margin-top:6px;align-items:flex-end">
+      <span style="flex:1"><label class="f">${esc(t("claude.model"))}</label><select id="clModel">
+        <option value="">${esc(t("claude.default", C.default_model || "opus"))}</option>
+        ${(C.models || []).map(m => `<option value="${esc(m)}" ${C.model === m ? "selected" : ""}>${esc(m[0].toUpperCase() + m.slice(1))}</option>`).join("")}</select></span>
+      <span style="flex:1"><label class="f">${esc(t("claude.effort"))}</label><select id="clEffort">
+        <option value="">${esc(t("claude.defaultEffort"))}</option>
+        ${(C.efforts || []).map(e => `<option value="${esc(e)}" ${C.effort === e ? "selected" : ""}>${esc(e)}</option>`).join("")}</select></span>
+      <button class="btn" id="clSave">${esc(t("claude.save"))}</button></div>
+    <p class="small muted">${esc(t("claude.settingsTip"))}</p>
+    <div class="msg" id="clMsg"></div>`;
+  $("#clSave").onclick = async () => {
+    const r = await fetch("/api/claude/settings", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({model: $("#clModel").value, effort: $("#clEffort").value})});
+    await refresh();
+    $("#clMsg").textContent = r.ok ? t("claude.saved") : (await r.json().catch(() => ({}))).detail || t("common.failed");
+    $("#clMsg").className = "msg " + (r.ok ? "ok" : "bad");
+  };
+  if (!active) $("#lgUse").onclick = async () => { const r = await useEngine("claude"); if (r.ok) renderDlg(); else { $("#lgMsg").textContent = r.message; $("#lgMsg").className = "msg bad"; } };
+  $("#lgOut").onclick = async () => { await fetch("/api/claude/logout", {method: "POST"}); await refresh(); renderDlg(); };
+  $("#lgRe").onclick = async () => { await fetch("/api/claude/logout", {method: "POST"}); startLogin(); };
+}
+let freeState = null;      // edited here until saved
+async function loadFree() {
+  if (!$("#orFree") || $("#orModel").value.trim() !== "auto:free") return;
+  const j = await (await fetch("/api/openrouter/free")).json();
+  freeState = j;
+  renderFree();
+}
+function renderFree() {
+  const box = $("#orFree");
+  if (!box || !freeState) return;
+  const a = freeState.auto || {}, hm = ts => new Date(ts * 1000).toLocaleTimeString(loc(), {hour: "2-digit", minute: "2-digit"});
+  box.innerHTML = `<p class="small muted" style="margin:12px 0 6px">${esc(t("free.intro"))}</p>
+    ${a.all_until ? `<div class="notice">${esc(t("free.allPaused", hm(a.all_until)))} <button class="btn small" id="orReset">${esc(t("free.reset"))}</button></div>` : ""}
+    <div class="small muted">${esc(t("free.today", a.used_today || 0, a.cap))}${a.paid != null ? " " + esc(t(a.paid ? "free.paid" : "free.unpaid")) : ""}</div>
+    <ul class="list">${freeState.models.map((m, i) => `<li><span><label class="chk" style="margin:0"><input type="checkbox" data-i="${i}" ${m.enabled ? "checked" : ""}><span>${i + 1}. ${esc(m.name)}${m.vision ? " 👁" : ""} <span class="muted small">(${esc(t("free.src." + m.qsrc))}: ${m.quality})</span>${m.cool_until ? ` <span class="tag wait" title="${esc(m.why || "")}">${esc(t("free.pause", hm(m.cool_until)))}</span>` : ""}</span></label></span>
+      <span><button class="btn small" data-up="${i}" ${i === 0 ? "disabled" : ""}>↑</button> <button class="btn small" data-down="${i}" ${i === freeState.models.length - 1 ? "disabled" : ""}>↓</button></span></li>`).join("")}</ul>
+    <div class="row"><button class="btn" id="orFreeSave">${esc(t("free.save"))}</button></div><div class="msg" id="orFreeMsg"></div>
+    <p class="small muted">${esc(t("free.warn"))}</p>`;
+  box.querySelectorAll("input[data-i]").forEach(c => c.onchange = () => { freeState.models[+c.dataset.i].enabled = c.checked; });
+  const move = (i, d) => { const m = freeState.models; [m[i], m[i + d]] = [m[i + d], m[i]]; renderFree(); };
+  box.querySelectorAll("[data-up]").forEach(b => b.onclick = () => move(+b.dataset.up, -1));
+  box.querySelectorAll("[data-down]").forEach(b => b.onclick = () => move(+b.dataset.down, 1));
+  if ($("#orReset")) $("#orReset").onclick = async () => { await fetch("/api/openrouter/free/reset", {method: "POST"}); await refresh(); loadFree(); };
+  $("#orFreeSave").onclick = async () => {
+    const ms = freeState.models, msg = $("#orFreeMsg");
+    const r = await fetch("/api/openrouter/free", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({order: ms.map(m => m.id), exclude: ms.filter(m => !m.enabled).map(m => m.id)})});
+    msg.textContent = r.ok ? t("free.saved") : (await r.json().catch(() => ({}))).detail || t("common.failed");
+    msg.className = "msg " + (r.ok ? "ok" : "bad");
+  };
+}
+function showOpenRouter(msg = "", cls = "msg") {
+  const o = S.engine?.openrouter || {}, active = S.engine?.name === "openrouter";
+  eb().innerHTML = `<p class="small">${t("or.intro")}</p>
+    <label class="f">${esc(t("or.key"))}</label>
+    ${o.hasKey ? `<div class="row" style="margin-bottom:8px"><span>${esc(t("or.saved"))} <code>${esc(o.hint)}</code></span><button class="btn small" id="orRm">${esc(t("or.remove"))}</button></div>` : ""}
+    <div class="row"><input type="password" id="orKey" placeholder="${o.hasKey ? esc(t("or.newKeyPh")) : "sk-or-…"}" autocomplete="off" style="flex:1"><button class="btn" id="orSave">${esc(t("or.saveKey"))}</button></div>
+    <label class="f">${esc(t("or.model"))}</label>
+    <input type="text" id="orModel" list="orList" value="${esc(o.model || "")}" placeholder="${esc(t("or.modelPh"))}" autocomplete="off">
+    <datalist id="orList"></datalist>
+    <div class="row" style="margin-top:8px"><button class="btn small" id="orAutoBtn" type="button">${esc(t("or.autoBtn"))}</button></div>
+    <div class="small muted" id="orInfo" style="margin-top:6px">${esc(t("or.hint"))}</div>
+    <div id="orFree"></div>
+    <div class="row" style="margin-top:14px"><button class="btn primary" id="orUse">${esc(active ? t("or.useSave") : t("or.use"))}</button></div>
+    <div class="${cls}" id="orMsg">${esc(msg)}</div>`;
+  const info = () => {
+    if ($("#orModel").value.trim() === "auto:free") { setText($("#orInfo"), t("or.autoInfo")); loadFree(); return; }
+    $("#orFree").innerHTML = "";
+    const m = (orModels || []).find(x => x.id === $("#orModel").value.trim());
+    const price = v => v == null ? "?" : "$" + v;
+    setText($("#orInfo"), m ? `${m.name} · ${m.vision ? t("or.vision") : t("or.noVision")} · ${t("or.price", price(m.in), price(m.out))}${m.ctx ? " · " + t("or.ctx") + " " + Math.round(m.ctx / 1000) + "k" : ""}`
+      : t("or.hint"));
+  };
+  const fill = () => { $("#orList").innerHTML = `<option value="auto:free">${esc(t("or.autoOpt"))}</option>` + (orModels || []).map(m => `<option value="${esc(m.id)}">${esc(m.name)}${m.vision ? " · 👁" : ""}</option>`).join(""); info(); };
+  if (orModels) fill(); else fetch("/api/openrouter/models").then(r => r.json()).then(j => { orModels = j.models || []; if (dtab === "openrouter" && $("#orList")) fill(); });
+  $("#orModel").oninput = info;
+  $("#orAutoBtn").onclick = () => { $("#orModel").value = "auto:free"; info(); };
+  if ((o.model || "") === "auto:free") loadFree();
+  const say = (x, ok) => { $("#orMsg").textContent = x; $("#orMsg").className = "msg " + (ok ? "ok" : "bad"); };
+  $("#orSave").onclick = async () => {
+    const key = $("#orKey").value.trim();
+    if (!key) return say(t("or.needKey"), false);
+    $("#orSave").disabled = true; say(t("or.checkingKey"), true); $("#orMsg").className = "msg";
+    const r = await fetch("/api/openrouter/key", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({key})});
+    const tx = await r.text(); let j = {}; try { j = JSON.parse(tx); } catch (e) {}
+    $("#orSave").disabled = false;
+    if (!r.ok) return say(j.detail || tx, false);
+    await refresh(); showOpenRouter(t("or.keyOk", j.label, j.limit_remaining), "msg ok");
+  };
+  if (o.hasKey) $("#orRm").onclick = async () => { await fetch("/api/openrouter/key/remove", {method: "POST"}); await refresh(); showOpenRouter(t("or.keyRemoved"), "msg ok"); };
+  $("#orUse").onclick = async () => {
+    const model = $("#orModel").value.trim();
+    if (!S.engine?.openrouter?.hasKey) return say(t("or.keyFirst"), false);
+    if (!model) return say(t("or.pickModel"), false);
+    const r = await useEngine("openrouter", model);
+    if (r.ok) showOpenRouter(active ? t("or.modelSaved") : t("or.nowUsing"), "msg ok"); else say(r.message, false);
+  };
+}
+
+async function runNow(b, id) { b.disabled = true; await fetch("/api/request/" + encodeURIComponent(id) + "/run", {method: "POST"}); refresh(); }
+// the person's own uploaded files open in a new tab (a PDF or photo is shown, other formats are downloaded)
+// with `upload` (a waiting upload of several files, not running) every file also gets a small ✕ that takes just that file out
+const filesHTML = (links, upload) => links.map(l => `<a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.name)}</a>${
+  upload ? ` <button class="x" type="button" title="${esc(t("queue.delFile"))}" aria-label="${esc(t("queue.delFile"))}" data-id="${esc(upload)}" data-file="${esc(l.file)}" data-name="${esc(l.name)}" onclick="delFile(this)">✕</button>` : ""}`).join(", ");
+async function delFile(b) {
+  const {id, file, name} = b.dataset;
+  if (!confirm(t("queue.delFileAsk", name))) return;
+  b.disabled = true;
+  const r = await fetch("/api/queue/file/delete", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({id, file})});
+  if (!r.ok) { let d; try { d = (await r.json()).detail; } catch (e) {} alert(typeof d === "string" ? d : t("common.failed")); }
+  refresh();
+}
+async function delQueue(b, id, running) {
+  if (!confirm(t(running ? "queue.delRunning" : "queue.delAsk"))) return;
+  b.disabled = true;
+  const r = await fetch("/api/queue/delete", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({id})});
+  if (!r.ok) { let d; try { d = (await r.json()).detail; } catch (e) {} alert(typeof d === "string" ? d : t("common.failed")); }
+  refresh();
+}
+async function limitGo(b) { b.disabled = true; await fetch("/api/limit/continue", {method: "POST"}); refresh(); }
+async function retry(id) { await fetch("/api/retry/" + encodeURIComponent(id), {method: "POST"}); refresh(); }
+$("#stopBtn").onclick = async () => {
+  const b = $("#stopBtn");
+  b.disabled = true;
+  await fetch(S.paused ? "/api/resume" : "/api/stop", {method: "POST"});
+  await refresh();
+  b.disabled = false;
+};
+$("#softBtn").onclick = async () => {
+  const b = $("#softBtn");
+  b.disabled = true;
+  await fetch(S.soft_stop ? "/api/resume" : "/api/stop/soft", {method: "POST"});
+  await refresh();
+  b.disabled = false;
+};
+
+/* ---------- status ---------- */
+function render() {
+  const w = S.worker || {}, pill = $("#worker"), c = S.claude || {}, E = S.engine || {name: "claude", ready: c.loggedIn, openrouter: {}};
+  if (S.anon) setText(pill, t("pill.view"), "pill");
+  else if (S.paused) setText(pill, t("pill.stopped"), "pill bad");
+  else if (!E.ready) setText(pill, E.name === "openrouter" ? t("pill.noOR") : t("pill.noClaude"), "pill bad");
+  else if (S.limit_gate) setText(pill, S.limit_gate.type === "batch" ? t("pill.batch", S.limit_gate.n) : t("pill.limit", Math.round(S.limit_gate.util * 100)), "pill bad");
+  else if (S.blocked && !S.running_here) setText(pill, E.name === "openrouter" && E.openrouter.model === "auto:free" && /free models|безкоштовн/i.test(S.blocked)
+                                                ? t("pill.pausedOR") : t("pill.paused"), "pill bad");
+  else if (w.state === "busy" && w.current) setText(pill, w.current, "pill busy");
+  else setText(pill, S.queue.length ? t("pill.queued") : t("pill.done"), "pill");
+  setText($("#me"), S.user.login && S.user.login !== "local" ? S.user.login : "");
+  $("#logoutBtn").hidden = $("#myAccount").hidden = !S.public || !!S.anon;
+  $("#loginBtn").hidden = !S.anon;
+  setText($("#members"), S.participants ? t("hdr.members", S.participants) : "");
+  $("#members").hidden = !S.participants;
+  document.querySelector(".engwrap").hidden = !!S.anon;
+  setText($("#claudeBtn"), !E.ready ? t("btn.setup") : E.name === "openrouter" ? "OpenRouter: " + (E.openrouter.model === "auto:free" ? t("btn.free") : (E.openrouter.model || "")) : "Claude: " + (c.email || t("common.connected")),
+          E.ready ? "btn small" : "btn small primary");
+
+  const sb = $("#stopBtn");
+  sb.hidden = !(S.paused || S.running_here || S.queue.length);
+  setText(sb, S.paused ? t("stop.resume") : t("stop.btn"), S.paused ? "btn small primary" : "btn small");
+  sb.title = S.paused ? t("stop.resumeTip") : t("stop.tip");
+  const so = $("#softBtn");
+  so.hidden = sb.hidden || S.paused;
+  setText(so, S.soft_stop ? t("soft.cancel") : t("soft.btn"), "btn small");
+  so.title = t("soft.tip");
+
+  const notes = [];
+  if (S.paused) notes.push(esc(t("note.stopped")));
+  else if (S.soft_stop) notes.push(esc(t("note.soft")));
+  const G = S.limit_gate;
+  if (G && G.type === "batch" && E.ready) {
+    notes.push(esc(t("note.batch", G.n)) + ` <button class="btn small primary" type="button" onclick="limitGo(this)">${esc(t("limit.go"))}</button>`);
+  } else if (G && E.ready) {
+    const key = "usage.type." + G.type, win = T.uk[key] ? t(key) : G.type;
+    const r = G.resets ? new Date(G.resets * 1000).toLocaleString(loc(), {weekday: "short", hour: "2-digit", minute: "2-digit"}) : "";
+    notes.push(esc(t("note.limit", Math.round(G.util * 100), win, r) + " " + (G.next ? t("limit.next", Math.round(G.next * 100)) : t("limit.last"))) +
+      ` <button class="btn small primary" type="button" onclick="limitGo(this)">${esc(t("limit.go"))}</button>`);
+  }
+  if (!E.ready) notes.push(esc(E.name === "openrouter" ? t("note.noOR") : t("note.noEngine")));
+  else if (S.blocked && !S.running_here) notes.push(t("note.blocked", esc(S.blocked)));
+  (S.digest_errors || []).forEach(e => notes.push(t("note.digest", esc(e.chapter), esc((e.error || "").slice(-200)))));
+  (S.build_errors || []).forEach(e => notes.push(t("note.build", esc(e.subject), e.edition, esc(e.error.slice(-200)))));
+  setHTML($("#notice"), notes.map(n => `<div class="notice">${n}</div>`).join(""));
+
+  const subjOpts = S.subjects.map(s => `<option value="${esc(s.id)}">${esc(s.title)}</option>`).join("");
+  fillUpload();
+  setOptions($("#rsubject"), subjOpts);
+  fillTopics();
+  renderSuggest();
+  renderExams();
+  renderUsage();
+  $("#adminTab").hidden = !S.is_admin;
+  setText($("#adminTab"), S.admin_pending ? t("nav.adminN", S.admin_pending) : t("nav.admin"));
+  if (!S.is_admin && $("#tab-admin").classList.contains("on")) document.querySelector("nav button[data-tab=add]").click();
+
+  setHTML($("#queue"), S.queue.length ? S.queue.map(q => `<li><span>${esc(q.kind === "exam" ? "" : {req: t("queue.req"), sug: t("queue.sug"), mrg: t("queue.mrg")}[q.type] || "")}${esc(q.label)}
+    ${q.date ? `<br><span class="muted small">${esc(t("recent.day", fmtDay(q.date)))}</span>` : ""}
+    ${q.file_links?.length ? `<br><span class="muted small">${esc(t("prog.files"))}${filesHTML(q.file_links, q.type === "sub" && q.file_links.length > 1 && !q.progress && !q.deleting ? q.id : "")}</span>`
+      : q.files?.length > 1 || (q.files?.length === 1 && q.files[0] !== q.label) ? `<br><span class="muted small">${esc(t("prog.files") + q.files.join(", "))}</span>` : ""}
+    ${q.last_error ? `<br><span class="small warn">${esc(t("queue.attempt", q.attempts, q.last_error.slice(0, 200)))}</span>` : ""}</span>
+    <span class="muted small">${S.paused && (q.type === "sub" || (q.type === "req" && q.kind !== "exam")) ? (q.queued_by_hand ? act("queued")
+      : `<button class="btn small primary" type="button" onclick="runNow(this, '${esc(q.id.replace(/\.json$/, ""))}')">${esc(t(q.type === "sub" ? "queue.sendNow" : "req.runNow"))}</button> `) : ""}${fmt(q.created)}${
+      !q.can_delete ? "" : q.deleting ? ` <span class="warn">${esc(t("queue.deleting"))}</span>`
+      : ` <button class="btn small" type="button" onclick="delQueue(this, '${esc(q.id)}', ${q.progress ? 1 : 0})">${esc(t("queue.del"))}</button>`}</span>${progHTML(q.progress)}</li>`).join("") : `<li class="muted">${esc(t("queue.empty"))}</li>`);
+  $("#failedWrap").hidden = !S.failed.length;
+  setHTML($("#failed"), S.failed.map(f => `<li><span>${esc(f.label)}<br><span class="small bad">${esc((f.error || "").slice(0, 300))}</span>${
+      f.file_links?.length ? `<br><span class="muted small">${esc(t("prog.files"))}${filesHTML(f.file_links)}</span>` : ""}</span>
+    <button class="btn small" onclick="retry('${esc(f.id)}')">${esc(t("common.retry"))}</button></li>`).join(""));
+  setHTML($("#recent"), S.recent.length ? S.recent.map(r => `<li><span>${esc(r.label)}
+    <br><span class="muted small">${r.refs ? esc(t("recent.ref")) : pl((r.entries || []).length, "pl.entry")}${
+      r.date ? ` · ${esc(t("recent.day", fmtDay(r.date)))}` : ""}${
+      r.unsupported?.length ? ` · <span class="warn">${esc(t("recent.unread"))} ${esc(r.unsupported.join(", "))}</span>` : ""}${
+      r.file_links?.length ? `<br>${esc(t("prog.files"))}${filesHTML(r.file_links)}` : ""}</span></span>
+    <span class="muted small">${fmt(r.done_at)}</span></li>`).join("") : `<li class="muted">${esc(t("recent.none"))}</li>`);
+
+  const withData = S.subjects.filter(s => s.entries || Object.keys(s.books).length || s.refs.length || s.activity);
+  setHTML($("#autoAct"), S.auto_activity ? act(S.auto_activity, "autoact") : "");
+  setHTML($("#subjects"), (S.shared && withData.length ? `<p class="note">${esc(t("books.shared"))}</p>` : "") +
+    (withData.length ? withData.map(s => {
+    const b = s.books;
+    return `<div class="card subj">
+      <h3>${esc(s.title)}<span class="code">${esc(s.code)}</span></h3>
+      <div class="meta">${esc(t("books.meta", s.entries, s.days.length))}${
+        b.clean ? esc(t("books.updated", fmt(b.clean.updated))) : ""}</div>
+      <div class="row">
+        ${b.clean ? `<a class="btn primary" href="${b.clean.url}" target="_blank">${esc(t("books.clean", mb(b.clean.bytes)))}</a>` : (s.activity ? "" : `<span class="muted small">${esc(t("books.building"))}</span>`)}
+        ${b.original ? `<a class="btn" href="${b.original.url}" target="_blank">${esc(t("books.orig", mb(b.original.bytes)))}</a>` : ""}
+        ${s.activity ? act(s.activity) : ""}
+      </div>
+      ${s.interactive.length || s.making.length ? `<details open data-k="${esc(s.id)}-inter"><summary>${esc(t("books.inter", s.interactive.length))}</summary><ul class="list">${
+        s.making.map(q => `<li><span>${q.edit ? esc(t("ipg.editing")) + " " : ""}${esc(q.text)}</span>${q.running ? act(q.edit ? "ipage_edit" : "interactive") : (S.paused && !q.queued_by_hand
+          ? `<span class="muted small">${esc(t("req.paused"))}</span> <button class="btn small primary" type="button" onclick="runNow(this, '${esc(q.id)}')">${esc(t("req.runNow"))}</button>`
+          : act("queued"))}</li>`).join("")}${
+        s.interactive.map(i => ipageRow(s.id, i)).join("")}</ul></details>` : ""}
+      ${s.days.length ? `<details data-k="${esc(s.id)}-days"><summary>${esc(t("books.days", s.days.length))}</summary>${
+        s.days.map(d => `<div class="day"><strong>${esc(fmtDayLong(d.date))}</strong><ul class="list">${
+          d.entries.map(e => `<li><span>${esc(e.title)} <span class="muted small">· ${esc(e.topic_title || e.topic)}</span>${
+            e.by_name ? `<br><span class="who">${esc(t("books.by", e.by_name))}${e.with?.length ? " · " + esc(t("books.with", e.with.join(", "))) : ""}${
+              S.shared && e.mine ? " · " + esc(t("books.mine")) : ""}</span>` : ""}</span>
+            ${S.anon || (S.shared && !e.mine) ? "" : `<input type="date" value="${esc(d.date)}" max="${today()}"
+              onchange="moveEntry('${esc(s.id)}','${esc(e.topic)}','${esc(e.entry)}',this.value)">`}</li>`).join("")}</ul></div>`).join("")}</details>` : ""}
+      ${(s.refs.length + s.open_refs.length) ? `<details data-k="${esc(s.id)}-refs"><summary>${esc(t("books.refs", s.refs.length + s.open_refs.length))}</summary><ul class="list">${
+        s.refs.concat(s.open_refs).map(r => `<li>${esc(r.title)}<span class="muted small">${r.pages} ${esc(t("unit.pages"))}${r.has_text ? "" : esc(t("books.noText"))}</span></li>`).join("")}</ul></details>` : ""}
+    </div>`;}).join("") : `<div class="empty">${esc(t("books.empty"))}</div>`));
+  setHTML($("#genRefs"), S.general_refs.length ? `<h2>${esc(t("books.genRefs"))}</h2><div class="card"><ul class="list">${
+    S.general_refs.map(r => `<li>${esc(r.title)}<span class="muted small">${r.pages} ${esc(t("unit.pages"))}</span></li>`).join("")}</ul></div>` : "");
+}
+
+// usage bar under the engine button: plan limits Claude Code last reported, or the free OpenRouter requests used today
+function renderUsage() {
+  const u = S.usage || {}, box = $("#usage");
+  const when = ts => {
+    const d = new Date(ts * 1000), soon = ts * 1000 - Date.now() < 20 * 3600 * 1000;
+    return d.toLocaleString(loc(), soon ? {hour: "2-digit", minute: "2-digit"} : {weekday: "short", hour: "2-digit", minute: "2-digit"});
+  };
+  const row = (label, frac, text, cls, tip) => `<span title="${esc(tip)}">${esc(label)}</span>` +
+    (frac == null ? `<span></span>` : `<span class="t ${cls}" title="${esc(tip)}"><b style="width:${Math.round(frac * 100)}%"></b></span>`) +
+    `<span class="${cls === "x" ? "x p" : ""}" title="${esc(tip)}">${esc(text)}</span>`;
+  let html = "";
+  if (u.engine === "claude") {
+    html = (u.limits || []).map(l => {
+      const key = "usage.type." + l.type, label = T.uk[key] ? t(key) : l.type, rej = l.status === "rejected";
+      const tip = [l.resets ? t("usage.resets", when(l.resets)) : "", l.seen ? t("usage.seen", fmt(l.seen)) : "", t("usage.tip")].filter(Boolean).join(" · ");
+      const frac = rej ? 1 : l.util, cls = rej || frac >= 0.95 ? "x" : frac >= 0.75 ? "w" : "";
+      const text = rej ? t("usage.rejected") : frac != null ? Math.round(frac * 100) + "%" : t("usage.ok");
+      return row(label, frac, text, cls, tip) + (l.resets && (rej || frac >= 0.75) ? `<span class="note">${esc(t("usage.resets", when(l.resets)))}</span>` : "");
+    }).join("") || `<span class="note" title="${esc(t("usage.tip"))}">${esc(t("usage.none"))}</span>`;
+  } else if (u.auto) {
+    const frac = u.cap ? Math.min(1, u.used / u.cap) : null, cls = frac >= 0.95 ? "x" : frac >= 0.75 ? "w" : "";
+    html = `<span class="note">${esc(t("usage.orToday"))}${u.paid ? " · " + esc(t("usage.orPaid")) : ""}</span>` +
+      row("", frac, u.cap ? `${u.used}/${u.cap}` : String(u.used), cls, t(u.paid ? "free.paid" : u.paid === false ? "free.unpaid" : "usage.orToday")) +
+      (u.until ? `<span class="note x l">${esc(t("usage.orPaused", when(u.until)))}</span>` : "");
+  }
+  setHTML(box, html);
+}
+
+// what exactly is being done to one queue item now: chunk i of n, its pages and files, the pass, model and step
+function progHTML(p) {
+  if (!p) return "";
+  const mins = iso => iso ? Math.max(0, Math.round((Date.now() - new Date(iso)) / 60000)) : null;
+  const key = "prog.pass." + p.pass, pass = p.pass ? (T.uk[key] ? t(key) : p.pass) : t("prog.start");
+  const head = [];
+  if (p.chunk && p.chunks) head.push(t("prog.chunk", p.chunk, p.chunks, p.pages || "?"));
+  else if (p.total_pages) head.push(t("prog.pages", p.total_pages));
+  const line2 = [pass];
+  if (p.model) line2.push(t("prog.model", p.model));
+  if (p.turn) line2.push(t("prog.turn", p.turn));
+  const m = mins(p.pass_since || p.since);
+  if (m != null) line2.push(t("prog.for", m));
+  const frac = p.chunks ? Math.min(1, (p.done || 0) / p.chunks) : null;
+  return `<div class="prog" role="status">${head.length ? esc(head.join(" · ")) + "<br>" : ""}<span class="act"><i aria-hidden="true"></i>${esc(line2.join(" · "))}</span>${
+    frac != null ? `<div class="pb" title="${esc(t("prog.done", p.done || 0, p.chunks))}"><i style="width:${Math.round(frac * 100)}%"></i></div><span class="pf">${esc(t("prog.done", p.done || 0, p.chunks))}</span>` : ""}${
+    p.files?.length ? `<br><span class="pf">${esc(t("prog.files") + p.files.join(", "))}</span>` : ""}${
+    p.group ? `<br><span class="pf">${esc(t("prog.group"))}</span>` : ""}</div>`;
+}
+
+// move one entry to another class day (a wrong date, or a supplement that belongs to an earlier class)
+async function moveEntry(subject, topic, entry, date) {
+  const msg = $("#dayMsg");
+  if (!date) return;
+  const r = await fetch("/api/entry/date", {method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({subject, topic, entry, date})});
+  if (r.ok) { msg.textContent = t("books.dateMoved"); msg.className = "msg ok"; }
+  else { let d; try { d = (await r.json()).detail; } catch (e) { d = r.status; } msg.textContent = t("add.error", d); msg.className = "msg bad"; }
+  refresh();
+}
+
+/* ---------- interactive pages: a glass button to open, a request to change ---------- */
+const IPE = {};         // pages with the change box open -> the text typed so far (a status refresh redraws the list)
+const ipKey = (subj, stem) => subj + "/" + stem;
+/* the glass flows while the pointer (or the keyboard focus) is on it; on leaving, the loop is not cut but run on to its end */
+const GLASS_MS = 3600;
+function glassIn(el) {
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches || !el.animate) return;
+  let a = el._ga;
+  if (a) { a.playbackRate = 1; a.effect.updateTiming({iterations: Infinity}); return; }
+  const cs = getComputedStyle(el), b0 = cs.getPropertyValue("--b0").trim() || "85%", p0 = parseFloat(cs.getPropertyValue("--p0")) || 0, e = "ease-in-out";
+  try {
+    a = el.animate([{offset: 0, "--b": b0, "--q": b0, "--p": p0 + "px", easing: e}, {offset: .33, "--b": "8%", "--q": "92%", "--p": p0 + 6 + "px", easing: e},
+      {offset: .66, "--b": "92%", "--q": "8%", "--p": p0 + 12 + "px", easing: e}, {offset: 1, "--b": b0, "--q": b0, "--p": p0 + "px"}],
+      {duration: GLASS_MS, iterations: Infinity});
+  } catch (err) { return; }
+  a.onfinish = a.oncancel = () => { if (el._ga === a) el._ga = null; };
+  el._ga = a;
+}
+function glassOut(el) {
+  const a = el._ga;
+  if (!a) return;
+  a.effect.updateTiming({iterations: Math.floor((a.currentTime || 0) / GLASS_MS) + 1});     // finish the round that is running
+  a.playbackRate = 2;
+}
+addEventListener("mouseover", e => { const g = e.target.closest?.(".gbtn"); if (g) glassIn(g); });
+addEventListener("mouseout", e => { const g = e.target.closest?.(".gbtn"); if (g && !g.contains(e.relatedTarget)) glassOut(g); });
+addEventListener("focusin", e => { const g = e.target.closest?.(".gbtn"); if (g) glassIn(g); });
+addEventListener("focusout", e => { const g = e.target.closest?.(".gbtn"); if (g && !g.contains(e.relatedTarget)) glassOut(g); });
+function ipVar(stem) {            // the glass of each button differs: numbers from its name
+  let h = 7;
+  for (const ch of stem) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  const f = (sh, m) => ((h >>> sh) % m) / m;
+  return `--p0:${(f(0, 97) * 9).toFixed(1)}px;--r:${(.8 + f(7, 89) * .75).toFixed(2)};--b0:${Math.round(40 + f(13, 83) * 20)}%;--dir:${(h >>> 5) & 1 ? "270deg" : "90deg"}`;
+}
+function ipageRow(subj, i) {
+  const k = ipKey(subj, i.stem), open = k in IPE && !S.anon, can = true;
+  const q = `'${esc(subj)}','${esc(i.stem)}'`;
+  return `<li class="ipg"><span class="gbtn" style="${ipVar(i.stem)}"><b class="gring" aria-hidden="true"></b><a class="glass" href="${i.url}" target="_blank"><span><i title="${esc(i.title)}">${esc(i.title)}</i></span></a><button class="gedit" type="button" aria-expanded="${open}" onclick="ipageToggle(${q})"><span>${esc(t("ipg.edit"))}</span></button></span>
+    ${can && i.mine && i.can_undo ? `<span class="ipb"><button class="btn small" type="button" onclick="ipageUndo(${q})">${esc(t("ipg.undo"))}</button></span>` : ""}
+    ${can && open ? `<div class="ipe">${i.mine ? "" : `<p class="muted small" style="margin:0 0 6px">${esc(t("ipg.copyNote"))}</p>`}<textarea maxlength="2000" placeholder="${esc(t("ipg.ph"))}" oninput="IPE['${esc(k)}'] = this.value">${esc(IPE[k])}</textarea>
+      <div class="row"><button class="btn small primary" type="button" onclick="ipageSend(this, ${q})">${esc(t("ipg.send"))}</button>
+      <button class="btn small" type="button" onclick="ipageToggle(${q})">${esc(t("ipg.cancel"))}</button><span class="msg" role="status"></span></div></div>` : ""}</li>`;
+}
+function ipageToggle(subj, stem) {
+  if (S?.anon) { openAuth(); return; }                  // a reader without an account signs in first
+  const k = ipKey(subj, stem);
+  if (k in IPE) delete IPE[k]; else IPE[k] = "";
+  render();
+  document.querySelector(".ipe textarea")?.focus();
+}
+async function ipageSend(b, subj, stem) {
+  const k = ipKey(subj, stem), box = b.closest(".ipe"), msg = box.querySelector(".msg"), text = (IPE[k] || "").trim();
+  if (!text) { msg.textContent = t("req.empty"); msg.className = "msg bad"; return; }
+  b.disabled = true;
+  const r = await fetch("/api/request", {method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({kind: "ipage_edit", subject: subj, stem, text})});
+  if (r.ok) { delete IPE[k]; refresh(); return; }
+  let d; try { d = (await r.json()).detail; } catch (e) { d = r.status; }
+  b.disabled = false; msg.textContent = t("add.error", d); msg.className = "msg bad";
+}
+async function ipageUndo(subj, stem) {
+  const r = await fetch("/api/ipage/undo", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({subject: subj, stem})});
+  if (!r.ok) { let d; try { d = (await r.json()).detail; } catch (e) { d = r.status; } alert(t("add.error", d)); }
+  refresh();
+}
+
+// what the server is doing to a book: spinner while Claude works or the PDFs are built, a pulsing dot while waiting
+const ACT_WAIT = {queued: 1};
+function act(phase, extra = "") {
+  const key = "act." + phase, text = T.uk[key] ? t(key) : phase;
+  return `<span class="act ${ACT_WAIT[phase] || !T.uk[key] ? "wait" : ""} ${extra}" role="status"><i aria-hidden="true"></i>${esc(text)}</span>`;
+}
+
+/* ---------- suggestions: additions to one page ---------- */
+const TAG = {queued: "wait", accepted: "ok", partial: "ok", rejected: "bad", failed: "bad", undone: ""};
+$("#ssubject").onchange = fillSugTargets;
+$("#stext").oninput = () => { $("#scount").textContent = `${$("#stext").value.length} / 1500`; };
+function fillSugTargets() {
+  const s = S?.subjects.find(x => x.id === $("#ssubject").value), groups = {};
+  (s?.targets || []).forEach(tg => (groups[tg.group] ||= []).push(tg));
+  const val = tg => tg.type === "entry" ? `e|${tg.topic}|${tg.entry}` : `i|${tg.stem}`;
+  setOptions($("#starget"), Object.keys(groups).length
+    ? Object.entries(groups).map(([g, l]) => `<optgroup label="${esc(g)}">${l.map(tg => `<option value="${esc(val(tg))}">${esc(tg.title)}</option>`).join("")}</optgroup>`).join("")
+    : `<option value="">${esc(t("sug.noPages"))}</option>`);
+}
+function renderSuggest() {
+  setOptions($("#ssubject"), S.subjects.map(s => `<option value="${esc(s.id)}">${esc(s.title)}</option>`).join(""));
+  fillSugTargets();
+  $("#shareRow").hidden = !!S.is_admin;
+  const lim = S.suggest_limits || {};
+  setText($("#slimit"), lim.wait > 0 ? t("sug.wait", lim.why, lim.wait < 90 ? lim.wait + " " + t("unit.s") : Math.ceil(lim.wait / 60) + " " + t("unit.min"))
+    : t("sug.today", lim.used_day || 0, lim.max_day || 5));
+  $("#ssend").disabled = lim.wait > 0;
+  setHTML($("#sugMine"), (S.suggestions || []).map(r => {
+    const label = T.uk["sug.s." + r.status] ? t("sug.s." + r.status) : r.status, c = TAG[r.status] || "";
+    const subj = S.subjects.find(s => s.id === r.subject)?.title || r.subject;
+    return `<div class="sug"><div><strong>${esc(r.label)}</strong><span class="tag ${c}">${esc(label)}</span>
+      <span class="muted small"> · ${esc(subj)} · ${fmt(r.created)}</span></div>
+      <div class="q">${esc(r.text)}</div>
+      ${r.reason ? `<div class="small">${esc(r.reason)}</div>` : ""}
+      ${r.summary && r.status !== "rejected" ? `<div class="muted small">${esc(t("sug.changed"))} ${esc(r.summary)}</div>` : ""}
+      ${r.share ? `<div class="small muted">${esc(t("sug.main"))} ${esc(r.share)}</div>` : ""}
+      ${r.can_undo ? `<button class="btn small" style="margin-top:6px" onclick="undoSug('${esc(r.id)}')">${esc(t("sug.undo"))}</button>` : ""}</div>`;
+  }).join(""));
+}
+$("#ssend").onclick = async () => {
+  const msg = $("#smsg"), v = $("#starget").value, subject = $("#ssubject").value, text = $("#stext").value.trim();
+  if (!v) { msg.textContent = t("sug.pickPage"); msg.className = "msg bad"; return; }
+  const [k, a, b] = v.split("|");
+  const target = k === "e" ? {type: "entry", subject, topic: a, entry: b} : {type: "interactive", subject, stem: a};
+  $("#ssend").disabled = true;
+  const r = await fetch("/api/suggest", {method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({target, text, share: !S.is_admin && $("#sshare").checked})});
+  if (r.ok) { msg.textContent = t("sug.ok"); msg.className = "msg ok"; $("#stext").value = ""; $("#stext").oninput(); }
+  else { let d; try { d = (await r.json()).detail; } catch (e) { d = r.status; } msg.textContent = d; msg.className = "msg bad"; }
+  refresh();
+};
+async function undoSug(id) {
+  const r = await (await fetch(`/api/suggest/${id}/undo`, {method: "POST"})).json();
+  const msg = $("#smsg"); msg.textContent = r.ok ? t("sug.undone") : (r.error || t("common.failed")); msg.className = "msg " + (r.ok ? "ok" : "bad");
+  refresh();
+}
+
+/* ---------- exam tickets ---------- */
+const exOff = new Set();                 // "subject|date" the person unticked; every class with text is ticked by default
+const exLast = {};                       // set id -> the ticket drawn last
+let exDel = null;                        // set id waiting for the second click on "Delete"
+const exDrawn = (() => { try { return JSON.parse(localStorage.getItem("exdrawn") || "{}") || {}; } catch (e) { return {}; } })();
+const saveDrawn = () => { try { localStorage.setItem("exdrawn", JSON.stringify(exDrawn)); } catch (e) {} };
+$("#exsubject").onchange = renderExams;
+$("#exdays").onchange = e => {
+  const key = $("#exsubject").value + "|" + e.target.dataset.d;
+  e.target.checked ? exOff.delete(key) : exOff.add(key);
+};
+const exTick = on => {
+  const sid = $("#exsubject").value;
+  document.querySelectorAll("#exdays input[data-d]:not(:disabled)").forEach(c => { c.checked = on; on ? exOff.delete(sid + "|" + c.dataset.d) : exOff.add(sid + "|" + c.dataset.d); });
+};
+$("#exAll").onclick = () => exTick(true);
+$("#exNone").onclick = () => exTick(false);
+const exDaysText = (e, s) => {
+  const days = e.days || [], all = (s?.days || []).filter(d => d.entries.some(x => !x.asis)).map(d => d.date);
+  if (!days.length) return "";
+  return days.length === all.length && all.every(d => days.includes(d)) ? t("ex.daysAll", days.length)
+    : t("ex.daysSome", days.length, fmtDay(days[0]), fmtDay(days[days.length - 1]));
+};
+function renderExams() {
+  const withText = S.subjects.filter(s => s.days.some(d => d.entries.some(e => !e.asis)));
+  setOptions($("#exsubject"), withText.map(s => `<option value="${esc(s.id)}">${esc(s.title)}</option>`).join(""));
+  const s = withText.find(x => x.id === $("#exsubject").value);
+  setHTML($("#exdays"), s ? s.days.map(d => {
+    const n = d.entries.filter(e => !e.asis).length;
+    return `<label><input type="checkbox" data-d="${esc(d.date)}" ${n ? "" : "disabled"} ${n && !exOff.has(s.id + "|" + d.date) ? "checked" : ""}>
+      <span>${esc(fmtDayLong(d.date))}<br><span class="muted small">${n ? esc(pl(n, "pl.entry")) : esc(t("ex.noText"))}</span></span></label>`;
+  }).join("") : `<div class="muted small">${esc(t("ex.noClasses"))}</div>`);
+  $("#exmake").disabled = !s;
+  const waiting = S.queue.filter(q => q.kind === "exam");
+  setHTML($("#exqueue"), waiting.length ? `<div class="card">${waiting.map(q => {
+    const sub = S.subjects.find(x => x.id === q.subject);
+    return `<div style="padding:4px 0"><strong>${esc(q.label)}</strong> ${act(sub?.activity === "exam" ? "exam" : "queued")}
+      ${q.last_error ? `<div class="small warn">${esc(t("queue.attempt", q.attempts, q.last_error.slice(0, 200)))}</div>` : ""}</div>`;
+  }).join("")}</div>` : "");
+  const have = S.subjects.filter(x => (x.exams || []).length);
+  setHTML($("#exsets"), `<h2>${esc(t("ex.setsH"))}</h2>` + (have.length ? have.map(x => `<div class="card"><strong>${esc(x.title)}</strong>
+    <div>${x.exams.map(e => examSet(x, e)).join("")}</div></div>`).join("") : `<div class="empty">${esc(t("ex.none"))}</div>`));
+}
+function examSet(s, e) {
+  const last = exLast[e.id], got = exDrawn[e.id] || [], left = e.tickets - got.length;
+  const pg = (k, n) => e.pages?.[k]?.[n - 1] ? "#page=" + e.pages[k][n - 1] : "";
+  const arg = `'${esc(s.id)}','${esc(e.id)}'`;
+  return `<div class="exset">
+    <div><strong>${esc(t("ex.title", e.tickets, e.per))}</strong>
+      <span class="muted small">· ${esc(t("ex.mix." + e.mix))} · ${esc(t("ex.level." + e.level))} · ${esc(t("ex.lang." + e.lang))}</span></div>
+    <div class="muted small">${esc(exDaysText(e, s))} · ${fmt(e.created)}${e.wish ? " · " + esc(e.wish.slice(0, 80)) : ""}</div>
+    <div class="row" style="margin-top:8px">
+      <a class="btn" href="${esc(e.tickets_url)}" target="_blank">${esc(t("ex.tickets"))}</a>
+      <a class="btn" href="${esc(e.answers_url)}" target="_blank">${esc(t("ex.answers"))}</a>
+      <button class="btn primary" type="button" onclick="drawTicket(${arg})">${esc(t("ex.draw"))}</button>
+      <button class="btn small" type="button" onclick="delExam(${arg})">${esc(exDel === e.id ? t("ex.sure") : t("ex.delete"))}</button>
+    </div>
+    ${last ? `<div class="drawn"><strong>${esc(t("ex.drawn", last))}</strong> <span class="muted small">· ${esc(t("ex.left", left))}</span>
+      <div class="row" style="margin-top:8px">
+        <a class="btn small primary" href="${esc(e.tickets_url)}${pg("tickets", last)}" target="_blank">${esc(t("ex.openTicket"))}</a>
+        <a class="btn small" href="${esc(e.answers_url)}${pg("answers", last)}" target="_blank">${esc(t("ex.openAnswer"))}</a>
+        <button class="btn small" type="button" onclick="resetDraw(${arg})">${esc(t("ex.reset"))}</button></div></div>` : ""}
+  </div>`;
+}
+// drawing without putting back, like at an exam; when the pile is empty it is shuffled again
+function drawTicket(sid, id) {
+  const e = S.subjects.find(x => x.id === sid)?.exams.find(x => x.id === id);
+  if (!e) return;
+  let got = exDrawn[id] || [];
+  if (got.length >= e.tickets) got = [];
+  const pile = Array.from({length: e.tickets}, (_, i) => i + 1).filter(n => !got.includes(n));
+  const n = pile[Math.floor(Math.random() * pile.length)];
+  exDrawn[id] = got.concat(n); exLast[id] = n; saveDrawn();
+  renderExams();
+}
+function resetDraw(sid, id) { delete exDrawn[id]; delete exLast[id]; saveDrawn(); renderExams(); }
+async function delExam(subject, id) {
+  if (exDel !== id) { exDel = id; renderExams(); setTimeout(() => { if (exDel === id) { exDel = null; renderExams(); } }, 4000); return; }
+  exDel = null;
+  const r = await fetch("/api/exam/delete", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({subject, id})});
+  const msg = $("#exmsg");
+  if (r.ok) { delete exDrawn[id]; delete exLast[id]; saveDrawn(); msg.textContent = t("ex.deleted"); msg.className = "msg ok"; }
+  else { let d; try { d = (await r.json()).detail; } catch (e) { d = r.status; } msg.textContent = t("add.error", d); msg.className = "msg bad"; }
+  refresh();
+}
+$("#exmake").onclick = async () => {
+  const msg = $("#exmsg"), subject = $("#exsubject").value;
+  const days = [...document.querySelectorAll("#exdays input[data-d]:checked")].map(c => c.dataset.d);
+  if (!subject || !days.length) { msg.textContent = t("ex.needDays"); msg.className = "msg bad"; return; }
+  $("#exmake").disabled = true;
+  const pick = name => document.querySelector(`input[name=${name}]:checked`).value;
+  const r = await fetch("/api/exam", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({
+    subject, days, tickets: +$("#exn").value, per: +$("#exper").value, mix: pick("exmix"), level: pick("exlevel"),
+    lang: $("#exlang").value, text: $("#extext").value.trim()})});
+  if (r.ok) { msg.textContent = t("ex.queued"); msg.className = "msg ok"; refresh(); }
+  else { let d; try { d = (await r.json()).detail; } catch (e) { d = r.status; } msg.textContent = t("add.error", typeof d === "string" ? d : r.status); msg.className = "msg bad"; }
+  $("#exmake").disabled = false;
+};
+
+/* ---------- admin: merging people's additions into the main book ---------- */
+let M = null;
+const MTAG = {new: "wait", proposed: "wait", skipped: "", merged: "ok", declined: "bad", undone: "", failed: "bad"};
+function diffHTML(lines) {
+  return lines.map(l => `<span class="${l[0] === "+" ? "a" : l[0] === "-" ? "r" : l[0] === "@" ? "h" : ""}">${esc(l)}</span>`).join("\n");
+}
+function renderAdmin() {
+  if (!M) return;
+  const people = M.people.map(u => {
+    const b = M.blocked.includes(u);
+    return `<button class="btn small" onclick="mState({uid:'${esc(u)}', block:${!b}})">${esc(b ? t("adm.unblock") : t("adm.block"))} ${esc(u)}</button>`;
+  }).join(" ");
+  setHTML($("#mctl"), `<div class="row" style="margin-top:12px">
+      <label class="chk" style="margin:0"><input type="checkbox" ${M.paused ? "checked" : ""} onchange="mState({paused:this.checked})"><span>${esc(t("adm.pause"))}</span></label></div>
+    <div class="small muted" style="margin-top:8px">${esc(t("adm.counts", M.pending, M.analysing, M.blocked.join(", ")))}</div>
+    ${people ? `<div class="row" style="margin-top:8px">${people}</div>` : ""}`);
+  setHTML($("#mlist"), M.items.length ? M.items.map(c => {
+    const label = T.uk["adm.s." + c.status] ? t("adm.s." + c.status) : c.status, k = MTAG[c.status] || "";
+    const subj = S.subjects.find(s => s.id === c.subject)?.title || c.subject;
+    const btn = (a, text, cls = "") => `<button class="btn small ${cls}" onclick="mAct('${esc(c.id)}','${a}')">${esc(text)}</button>`;
+    return `<div class="card"><div><strong>${esc(c.label)}</strong><span class="tag ${k}">${esc(label)}</span>
+        <div class="muted small">${esc(c.from_name)} · ${esc(subj)} · ${esc(c.type === "entry" ? t("adm.entry") : t("adm.interactive"))} · ${fmt(c.created)}</div></div>
+      <div class="sug" style="border:0"><div class="small muted">${esc(t("adm.userSug"))}</div><div class="q">${esc(c.text)}</div>
+        ${c.summary ? `<div class="muted small">${esc(t("adm.theirs"))} ${esc(c.summary)}</div>` : ""}</div>
+      ${c.analysis_reason ? `<div class="small"><strong>${esc(t("adm.analysis"))}</strong> ${esc(c.analysis_reason)}</div>` : ""}
+      ${c.match_title ? `<div class="small muted">${esc(t("adm.mainPage"))} ${esc(c.match_title)}${c.summary_main ? ` — ${esc(c.summary_main)}` : ""}</div>` : ""}
+      ${c.diff?.length ? `<pre class="diff">${diffHTML(c.diff)}</pre>` : ""}
+      ${c.last_error ? `<div class="small warn">${esc(c.last_error)}</div>` : ""}
+      <div class="row" style="margin-top:8px">
+        ${c.status === "proposed" ? btn("merge", t("adm.merge"), "primary") + btn("decline", t("adm.decline")) : ""}
+        ${c.status === "merged" ? btn("undo", t("adm.undo")) : ""}
+        ${["skipped", "failed", "declined"].includes(c.status) ? btn("reanalyze", t("adm.reanalyze")) : ""}
+        ${["skipped", "failed"].includes(c.status) ? btn("decline", t("adm.close")) : ""}</div></div>`;
+  }).join("") : `<div class="empty">${esc(t("adm.none"))}</div>`);
+}
+let A = null;
+async function loadAccounts() {
+  try { A = await (await fetch("/api/admin/accounts")).json(); renderAccounts(); } catch (e) {}
+}
+function renderAccounts() {
+  if (!A || !A.accounts) return;
+  $("#acctCard").hidden = false;
+  setHTML($("#acctUrl"), A.url ? `${esc(t("acc.url"))} <a href="${esc(A.url)}" target="_blank" rel="noopener">${esc(A.url)}</a>` : esc(t("acc.noUrl")));
+  const btn = (u, a, key) => `<button class="btn small" onclick="accAct('${esc(u)}','${a}')">${esc(t(key))}</button>`;
+  setHTML($("#acctList"), `<div class="muted small" style="margin:8px 0">${esc(t("acc.count", A.accounts.length, A.max))}</div>` +
+    (A.accounts.length ? `<ul class="list">${A.accounts.map(a => `<li><span><strong>${esc(a.username)}</strong>${a.disabled ? ` <span class="tag bad">${esc(t("acc.disabled"))}</span>` : ""}
+      <br><span class="muted small">${esc(a.last_login ? t("acc.last") + " " + fmt(a.last_login) : t("acc.never"))} · ${esc(a.engine === "openrouter"
+        ? t(a.or_paid ? "acc.orPaid" : a.or_paid === false ? "acc.orFree" : "acc.orUnknown") : t("acc.engClaude"))}</span></span>
+      <span class="row wrap">${btn(a.username, a.disabled ? "enable" : "disable", a.disabled ? "acc.enable" : "acc.disable")}${btn(a.username, "logout", "acc.logout")}${btn(a.username, "reset", "acc.reset")}</span></li>`).join("")}</ul>`
+      : `<div class="muted small">${esc(t("acc.none"))}</div>`));
+}
+async function accAct(user, action) {
+  const msg = $("#acctMsg");
+  const r = await fetch(`/api/admin/accounts/${encodeURIComponent(user)}/${action}`, {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"});
+  const j = await r.json().catch(() => ({}));
+  if (r.ok) { msg.textContent = j.temp_password ? t("acc.temp", user, j.temp_password) : t("acc.done"); msg.className = "msg ok"; }
+  else { msg.textContent = t("add.error", j.detail || r.status); msg.className = "msg bad"; }
+  loadAccounts();
+}
+
+/* ---------- admin: the supervisor bot and the skill the models work by ---------- */
+let SV = null, SK = null;
+async function loadSupervisor() {
+  try { SV = await (await fetch("/api/admin/supervisor")).json(); renderSupervisor(); } catch (e) {}
+}
+function renderSupervisor() {
+  if (!SV) return;
+  $("#svCard").hidden = false;
+  const c = SV.checks || {}, sites = Object.entries(c.sites || {}).map(([p, ok]) => `${p} ${ok ? "✓" : "✗"}`).join(", ");
+  const people = (c.people || []).map(p => esc(p.who) + (p.queue ? ` (${esc(t("sv.queue", p.queue))})` : "") +
+    (p.engine === "openrouter" ? ` · ${esc(t(p.or_paid ? "acc.orPaid" : p.or_paid === false ? "acc.orFree" : "acc.orUnknown"))}` : "")).join("; ");
+  const wkey = "sv.w." + c.worker;
+  setHTML($("#svBody"), `<div class="small" style="margin-top:8px">${esc(SV.last ? t("sv.last", fmt(SV.last)) : "")}${
+      c.worker ? " · " + esc(t("sv.worker", T.uk[wkey] ? t(wkey) : c.worker)) : ""}${
+      c.disk_free_gb != null ? " · " + esc(t("sv.disk", c.disk_free_gb)) : ""}${sites ? " · " + esc(t("sv.sites")) + " " + esc(sites) : ""}</div>
+    ${people ? `<div class="small muted" style="margin-top:4px">${people}</div>` : ""}
+    <div class="small muted" style="margin-top:4px">${esc(t(SV.telegram ? "sv.tgOn" : "sv.tgOff"))}</div>
+    <div class="row" style="margin-top:8px"><button class="btn small" type="button" onclick="svRun(this)">${esc(t("sv.run"))}</button></div>
+    <div style="margin-top:8px">${(SV.events || []).length ? SV.events.slice(0, 30).map(ev => `<div class="ev"><span class="lv ${esc(ev.level)}">${
+      esc(t("sv.lv." + ev.level))}</span>${ev.who ? `<strong>${esc(ev.who)}</strong>: ` : ""}${esc(LANG === "en" ? ev.en : ev.uk)}
+      <span class="muted small"> · ${fmt(ev.at)}</span></div>`).join("") : `<div class="muted small">${esc(t("sv.none"))}</div>`}</div>`);
+}
+async function svRun(b) {
+  b.disabled = true;
+  try { SV = await (await fetch("/api/admin/supervisor/run", {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"})).json(); renderSupervisor(); }
+  catch (e) {}
+  b.disabled = false;
+}
+async function loadSkill() {
+  try { SK = await (await fetch("/api/admin/skill")).json(); renderSkill(); } catch (e) {}
+}
+function renderSkill() {
+  if (!SK) return;
+  $("#skCard").hidden = false;
+  const open = $("#skText")?.open, hopen = $("#skHist")?.open, b = SK.budget || [];
+  const hist = (SK.history || []).map(h => `<li><span><strong>${esc(h.v)}</strong> <span class="tag">${esc(T.uk["sk.how." + h.how] ? t("sk.how." + h.how) : h.how)}</span>${
+      h.usd ? ` <span class="muted small">$${esc(h.usd)}</span>` : ""}${h.notes ? `<br><span class="muted small" style="white-space:pre-wrap">${esc(h.notes.slice(0, 600))}</span>` : ""}</span>
+    <button class="btn small" type="button" onclick="skRollback('${esc(h.v)}')">${esc(t("sk.rollback"))}</button></li>`).join("");
+  setHTML($("#skBody"), `<div class="small" style="margin-top:8px">${esc(SK.running ? t("sk.running") : SK.request ? t("sk.requested") :
+      SK.last_at ? t("sk.last", fmt(SK.last_at), SK.last_rounds || 0, (SK.last_usd || 0).toFixed(2), (SK.last_budget || 0).toFixed(2)) : t("sk.never"))}</div>
+    ${b.length ? `<div class="small muted">${esc(t(b[1] === "measured" ? "sk.budgetM" : "sk.budgetD", Number(b[0]).toFixed(2)))}</div>` : ""}
+    <div class="small muted">${esc(t("sk.evidence", SK.evidence || 0, SK.min_evidence || 0))} · ${esc(t("sk.size", SK.chars || 0))}</div>
+    ${SK.engine_claude ? "" : `<div class="small warn">${esc(t("sk.notClaude"))}</div>`}
+    ${SK.last_error ? `<div class="small warn">${esc(t("sk.err", SK.last_error))}</div>` : ""}
+    <label class="chk"><input type="checkbox" ${SK.auto ? "checked" : ""} onchange="skAuto(this.checked)"><span>${esc(t("sk.auto"))}</span></label>
+    <div class="row" style="margin-top:8px"><button class="btn small primary" type="button" ${SK.running || SK.request || !SK.engine_claude ? "disabled" : ""} onclick="skLearn(this)">${esc(t("sk.learn"))}</button></div>
+    <details id="skText" ${open ? "open" : ""}><summary>${esc(t("sk.view"))}</summary><pre class="skill">${esc(SK.text || "")}</pre></details>
+    ${hist ? `<details id="skHist" ${hopen ? "open" : ""}><summary>${esc(t("sk.hist"))}</summary><ul class="list">${hist}</ul></details>` : ""}`);
+}
+async function skPost(path, body) {
+  const r = await fetch(path, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body || {})});
+  const j = await r.json().catch(() => ({}));
+  const msg = $("#skMsg");
+  if (!r.ok) { msg.textContent = t("add.error", j.detail || r.status); msg.className = "msg bad"; }
+  return r.ok;
+}
+async function skLearn(b) {
+  b.disabled = true;
+  if (await skPost("/api/admin/skill/learn")) { $("#skMsg").textContent = t("sk.queued"); $("#skMsg").className = "msg ok"; }
+  loadSkill();
+}
+async function skAuto(on) { await skPost("/api/admin/skill/auto", {auto: on}); loadSkill(); }
+async function skRollback(v) {
+  if (await skPost("/api/admin/skill/rollback", {v})) { $("#skMsg").textContent = t("sk.rolled"); $("#skMsg").className = "msg ok"; }
+  loadSkill();
+}
+
+async function loadAdmin() {
+  try { M = await (await fetch("/api/admin/merge")).json(); renderAdmin(); } catch (e) {}
+}
+async function mAct(id, action) {
+  const r = await (await fetch(`/api/admin/merge/${id}/${action}`, {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"})).json();
+  if (!r.ok) alert(r.error || t("common.failed"));
+  refresh();
+}
+async function mState(body) {
+  await fetch("/api/admin/merge/state", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  refresh();
+}
+
+/* ---------- the public side: sign in / sign up behind the "are you a person" check ---------- */
+let AUTH = null, tsId = null, tsLoading = null;
+const authMode = () => document.querySelector("input[name=am]:checked").value;
+async function authConfig() { return AUTH ||= await (await fetch("/api/auth/config")).json(); }
+function loadTurnstile() {
+  return tsLoading ||= new Promise((res, rej) => {
+    const sc = document.createElement("script");
+    sc.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"; sc.onload = res; sc.onerror = rej;
+    document.head.appendChild(sc);
+  });
+}
+async function mountTurnstile() {
+  const cfg = await authConfig();
+  if (!cfg.turnstile || tsId !== null) return;
+  try { await loadTurnstile(); tsId = turnstile.render("#turnstile", {sitekey: cfg.turnstile}); } catch (e) {}
+}
+// Without Turnstile keys: a puzzle the server issued; the browser finds a number whose SHA-256 starts with `bits` zero bits
+function solvePow(ch) {
+  return new Promise((res, rej) => {
+    const src = `onmessage = async e => { const {salt, bits} = e.data, enc = new TextEncoder();
+      for (let base = 0; ; base += 256) {
+        const hs = await Promise.all(Array.from({length: 256}, (_, k) => crypto.subtle.digest("SHA-256", enc.encode(salt + ":" + (base + k)))));
+        for (let k = 0; k < 256; k++) {
+          let z = 0; for (const b of new Uint8Array(hs[k])) { if (b === 0) { z += 8; continue; } z += Math.clz32(b) - 24; break; }
+          if (z >= bits) { postMessage(base + k); return; }
+        }
+      } };`;
+    const w = new Worker(URL.createObjectURL(new Blob([src], {type: "text/javascript"})));
+    w.onmessage = e => { w.terminate(); res(e.data); };
+    w.onerror = e => { w.terminate(); rej(e); };
+    w.postMessage({salt: ch.salt, bits: ch.bits});
+  });
+}
+async function humanProof() {
+  const cfg = await authConfig();
+  if (cfg.turnstile) {
+    const tok = tsId !== null ? turnstile.getResponse(tsId) : "";
+    if (!tok) throw new Error("needHuman");
+    return {turnstile: tok};
+  }
+  if (!window.crypto?.subtle) throw new Error("noCrypto");
+  const ch = await (await fetch("/api/auth/challenge")).json();
+  if (!ch.salt) throw new Error(ch.detail || "challenge");
+  return {pow: {salt: ch.salt, bits: ch.bits, exp: ch.exp, sig: ch.sig, n: await solvePow(ch)}};
+}
+function applyAuthMode() {
+  const reg = authMode() === "register";
+  $("#apBox").hidden = $("#auHint").hidden = !reg;
+  $("#ap").autocomplete = reg ? "new-password" : "current-password";
+  setText($("#aGo"), t(reg ? "auth.goRegister" : "auth.goLogin"));
+}
+document.querySelectorAll("input[name=am]").forEach(r => r.onchange = applyAuthMode);
+function openAuth() {
+  if ($("#auth").open) return;
+  const anon = !!(S && S.anon);                         // a reader can dismiss it; with no book behind it, nobody can
+  $("#aX").hidden = $("#aWhy").hidden = !anon;
+  $("#auth").showModal(); applyAuthMode(); mountTurnstile();
+}
+$("#loginBtn").onclick = openAuth;
+$("#auth").addEventListener("cancel", e => { if (!(S && S.anon)) e.preventDefault(); });
+$("#aForm").onsubmit = async ev => {
+  ev.preventDefault();
+  const mode = authMode(), user = $("#au").value.trim().toLowerCase(), pw = $("#ap").value, msg = $("#aMsg"), go = $("#aGo");
+  const fail = text => { msg.textContent = text; msg.className = "msg bad"; };
+  msg.textContent = "";
+  if (!user || !pw) return fail(t("auth.fill"));
+  if (mode === "register" && pw !== $("#ap2").value) return fail(t("auth.mismatch"));
+  go.disabled = true; setText($("#aState"), t("auth.checking"));
+  try {
+    const r = await fetch("/api/auth/" + mode, {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({username: user, password: pw, ...(await humanProof())})});
+    if (r.ok) { $("#ap").value = $("#ap2").value = ""; $("#auth").close(); refresh(); }
+    else { let d; try { d = (await r.json()).detail; } catch (e) { d = r.status; } fail(typeof d === "string" ? d : t("common.failed")); }
+  } catch (e) {
+    fail(e.message === "needHuman" ? t("auth.needHuman") : e.message === "noCrypto" ? t("auth.noCrypto") : t("auth.noConn"));
+  }
+  if (tsId !== null) try { turnstile.reset(tsId); } catch (e) {}
+  go.disabled = false; setText($("#aState"), "");
+};
+$("#logoutBtn").onclick = async () => {
+  await fetch("/api/auth/logout", {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"});
+  location.reload();
+};
+$("#pwGo").onclick = async () => {
+  const msg = $("#pwMsg");
+  const r = await fetch("/api/auth/password", {method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({old: $("#pwOld").value, new: $("#pwNew").value})});
+  if (r.ok) { msg.textContent = t("me.pwDone"); msg.className = "msg ok"; $("#pwOld").value = $("#pwNew").value = ""; }
+  else { let d; try { d = (await r.json()).detail; } catch (e) { d = r.status; } msg.textContent = typeof d === "string" ? d : t("common.failed"); msg.className = "msg bad"; }
+};
+
+async function refresh() {
+  try {
+    const r = await fetch("/api/status");
+    if (r.status === 401) { S = null; openAuth(); return; }       // the public side: not signed in
+    S = await r.json();
+    if ($("#auth").open && !S.anon) $("#auth").close();
+    render();
+    if (S.anon && !window._anonTab) { window._anonTab = true; document.querySelector("nav button[data-tab=books]").click(); }
+    if (S.is_admin) {
+      await loadAdmin(); await loadAccounts();
+      if (!SV || $("#tab-admin").classList.contains("on")) await loadSupervisor();
+      if (!SK || ($("#tab-admin").classList.contains("on") && Date.now() - (window._skT || 0) > 30000)) { window._skT = Date.now(); await loadSkill(); }
+    }
+  }
+  catch (e) { $("#worker").textContent = t("pill.down"); $("#worker").className = "pill bad"; }
+}
+applyStatic();
+refresh();
+setInterval(() => { if (!document.hidden) refresh(); }, 5000);
+</script>
+</body>
+</html>

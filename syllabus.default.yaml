@@ -1,0 +1,89 @@
+# Subjects and topics used to sort uploads. B.Sc. Aerospace TUM, 1st semester (SPO 2025-01).
+# Topic order here does not matter: chapters follow the order in which material arrives.
+# New topics/subjects found in uploads are appended automatically with `auto: true`.
+subjects:
+- id: math1
+  title: Advanced Mathematics for Engineers 1
+  code: CIT513013
+  topics:
+  - {id: logic-sets, title: 'Logic, sets and proof techniques'}
+  - {id: numbers, title: 'Real numbers, induction and inequalities'}
+  - {id: complex-numbers, title: Complex numbers}
+  - {id: vectors, title: Vectors and analytic geometry}
+  - {id: linear-systems, title: Linear systems and Gaussian elimination}
+  - {id: matrices, title: Matrices and determinants}
+  - {id: vector-spaces, title: 'Vector spaces, bases and linear maps'}
+  - {id: eigenvalues, title: Eigenvalues and eigenvectors}
+  - {id: sequences, title: Sequences and limits}
+  - {id: series, title: Series}
+  - {id: continuity, title: Functions and continuity}
+  - {id: differentiation, title: Differential calculus}
+  - {id: taylor-extrema, title: 'Taylor expansion, extrema and curve sketching'}
+  - {id: integration, title: Integral calculus}
+- id: statics
+  title: Engineering Mechanics I – Statics
+  code: LRG0010
+  topics:
+  - {id: forces, title: Forces and force systems}
+  - {id: moments, title: Moments and couples}
+  - {id: equilibrium, title: Equilibrium of rigid bodies}
+  - {id: supports-fbd, title: 'Supports, constraints and free-body diagrams'}
+  - {id: center-of-gravity, title: Centre of gravity and centroids}
+  - {id: trusses, title: Trusses}
+  - {id: multibody, title: Frames and multi-body systems}
+  - {id: internal-forces, title: 'Internal forces in beams (N, Q, M)'}
+  - {id: cables, title: Ropes and cables}
+  - {id: friction, title: Friction}
+  - {id: virtual-work, title: Principle of virtual work and stability}
+- id: ecs1
+  title: Engineering Computer Science I (Computational Foundations I)
+  topics:
+  - {id: matlab-basics, title: 'MATLAB: basics, scripts and plotting'}
+  - {id: number-representation, title: Number representation and data types}
+  - {id: control-flow, title: Control flow}
+  - {id: functions, title: Functions and modular programs}
+  - {id: arrays-matrices, title: Arrays and matrices}
+  - {id: c-basics, title: 'C: syntax, compilation and types'}
+  - {id: pointers-memory, title: 'Pointers, arrays and memory'}
+  - {id: structs-files, title: Structures and file I/O}
+  - {id: cpp-oop, title: 'C++: classes and objects'}
+  - {id: algorithms, title: Algorithms and complexity}
+  - {id: numerics, title: Basic numerical methods}
+- id: intro-aerospace
+  title: Introduction to Aerospace
+  topics:
+  - {id: overview-history, title: Overview and history of aerospace}
+  - {id: atmosphere, title: The atmosphere}
+  - {id: aerodynamics, title: Aerodynamics basics}
+  - {id: flight-mechanics, title: Flight performance and flight mechanics}
+  - {id: propulsion, title: Propulsion}
+  - {id: structures, title: Aircraft and spacecraft structures}
+  - {id: spaceflight, title: Orbits and spaceflight}
+  - {id: systems-design, title: Systems and design}
+  - {id: industry, title: 'Industry, certification and practice'}
+- id: cad-td
+  title: CAD/TD for Aerospace Engineers
+  topics:
+  - {id: drawing-basics, title: Technical drawing basics and standards}
+  - {id: projections-sections, title: 'Projections, views and sections'}
+  - {id: dimensioning, title: Dimensioning}
+  - {id: tolerances, title: 'Tolerances, fits and surface specifications'}
+  - {id: standard-parts, title: 'Standard parts: threads, fasteners, bearings'}
+  - {id: cad-sketches, title: 'CAD: sketches and constraints'}
+  - {id: cad-parts, title: 'CAD: part modelling'}
+  - {id: cad-assemblies, title: 'CAD: assemblies'}
+  - {id: cad-drawings, title: 'CAD: drawings from models'}
+- id: materials
+  title: Aerospace Materials Science and Processing
+  topics:
+  - {id: atomic-structure, title: Atomic structure and bonding}
+  - {id: crystal-structure, title: Crystal structures and defects}
+  - {id: mechanical-properties, title: Mechanical properties and testing}
+  - {id: phase-diagrams, title: Phase diagrams}
+  - {id: strengthening-heat-treatment, title: 'Diffusion, strengthening and heat treatment'}
+  - {id: metals, title: 'Aluminium, titanium, steels and nickel alloys'}
+  - {id: polymers, title: Polymers}
+  - {id: ceramics, title: Ceramics and glasses}
+  - {id: composites, title: Composites}
+  - {id: failure, title: 'Fatigue, fracture, creep and corrosion'}
+  - {id: processing, title: 'Processing: casting, forming, machining, joining, additive'}

@@ -1,0 +1,21 @@
+[Unit]
+Description=Studybooks PUBLIC page (behind the Cloudflare quick tunnel: own sign-in, no Tailscale identity)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=USER
+Group=USER
+WorkingDirectory=/home/USER/studybooks
+Environment=SB_PUBLIC=1
+Environment=SB_MAX_PUBLIC_USERS=200
+# Cloudflare Turnstile instead of the built-in puzzle (optional): put SB_TURNSTILE_SITEKEY and SB_TURNSTILE_SECRET in this file
+EnvironmentFile=-/home/USER/studybooks/public.env
+ExecStart=/home/USER/studybooks/.venv/bin/uvicorn web:app --host 127.0.0.1 --port 8811 --proxy-headers --forwarded-allow-ips=127.0.0.1
+Restart=always
+RestartSec=5
+KillMode=process
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target

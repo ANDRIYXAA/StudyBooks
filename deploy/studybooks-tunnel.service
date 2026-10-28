@@ -1,0 +1,11 @@
+[Unit]
+Description=Cloudflare quick tunnel for the PUBLIC Studybooks page (the address changes on every start; it is written to tunnel.log)
+After=network-online.target
+
+[Service]
+ExecStart=/home/USER/.local/bin/cloudflared tunnel --no-autoupdate --logfile /home/USER/studybooks/data/state/tunnel.log --url http://127.0.0.1:8811
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

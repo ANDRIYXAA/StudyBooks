@@ -1,0 +1,18 @@
+[Unit]
+Description=Studybooks web page (uploads + books)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=USER
+Group=USER
+WorkingDirectory=/home/USER/studybooks
+ExecStart=/home/USER/studybooks/.venv/bin/uvicorn web:app --host 127.0.0.1 --port 8810 --proxy-headers --forwarded-allow-ips=127.0.0.1
+Restart=always
+RestartSec=5
+# the worker it may start must survive a restart of the page
+KillMode=process
+MemoryMax=2G
+
+[Install]
+WantedBy=multi-user.target

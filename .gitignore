@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+data/
+.env
+*.key
+*.bak
+# course material from Moodle: copyrighted, big, not part of the code
+pdfs_from_moodle/
+CLAUDE.md
