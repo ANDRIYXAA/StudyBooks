@@ -3407,7 +3407,7 @@ URL_RE = re.compile(r"https?://|\bwww\.|\bftp://|javascript:|vbscript:|\bdata:(?
 MD_BAD = re.compile(r"<[A-Za-z/!?]|!\[|\]\(|\{=|^\s*```\s*\{", re.M)
 HTML_BAD = re.compile(
     r"\bfetch\s*\(|XMLHttpRequest|WebSocket|EventSource|sendBeacon|importScripts|\bimport\s*\(|\beval\s*\(|"
-    r"new\s+Function|\bFunction\s*\(|document\.cookie|localStorage|sessionStorage|indexedDB|window\.open|"
+    r"(?-i:new\s+Function|\bFunction\s*\()|document\.cookie|localStorage|sessionStorage|indexedDB|window\.open|"
     r"\.postMessage|\b(?:window\.|document\.|top\.|self\.|parent\.)?location\s*(?:=|\.href|\.assign|\.replace)|"
     r"navigator\.|\bWorker\s*\(|SharedWorker|serviceWorker|\bwindow\.(?:parent|top|opener)\b|"
     r"\b(?:parent|top|opener)\s*\.\s*(?:location|document|postMessage|window|frames|fetch)\b|"

@@ -90,6 +90,9 @@ check("only an external script (a saved site) does not",
 check("only MathJax config does not",
       not sb.looks_interactive('<html><body><input><script>window.MathJax = {tex: {inlineMath: [["$","$"]]}}; ' + "// pad\n" * 80 + '</script></body></html>'))
 check("a clean page has no problems", sb.page_problems(IA) == [], sb.page_problems(IA))
+check("an ordinary function expression is not dynamic code", sb.html_problems(IA.replace("draw();  //", "[1].map(function (v) { return v; });  //", 1)) == [])
+check("new Function and Function( still are", sb.html_problems(IA.replace("draw();  //", "new Function('1');  //", 1)) != []
+      and sb.html_problems(IA.replace("draw();  //", "Function('1')();  //", 1)) != [])
 check("svg namespaces are not outside links", sb.page_problems(IA.replace("<canvas", '<svg xmlns="http://www.w3.org/2000/svg"></svg><canvas')) == [])
 for what, bad in (("the network", IA.replace("draw();  //", "fetch('https://evil.example/x');  //", 1)),
                   ("an outside file", IA.replace("<canvas", '<img src="fig.png"><canvas')),
