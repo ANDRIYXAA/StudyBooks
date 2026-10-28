@@ -1515,7 +1515,6 @@ def run_openrouter(sp, prompt, cwd, add_dirs=(), timeout=2400, need_vision=False
 
     def switch(model, why):
         """auto mode only: the current model is out; the next best one continues with the same conversation."""
-        nonlocal msgs, have_images
         switches.append(f"{model} ({why})")
         new = choose()
         for m in msgs:                              # reasoning blobs belong to the model that wrote them
@@ -4761,7 +4760,7 @@ def kick():
     main = main_space()
     if not any(wants_worker(sp) for sp in spaces()) and not (main and learn_due(main)):
         return {"ok": True, "started": False, "idle": True}
-    with open(LOG, "a") as logf:
+    with open(LOG, "a", encoding="utf-8") as logf:
         subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "run"], cwd=str(ROOT),
                          stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, start_new_session=True)
     return {"ok": True, "started": True}
