@@ -15,7 +15,7 @@ The page is served in a sandbox with no network at all, with only inline scripts
 
 What to do:
 1. Read the whole page and work out what it teaches.
-2. Make the change the student asks for, with the smallest edit that does it. Keep everything else: the controls, the look, the language of the page.
+2. Make the change the student asks for, with the smallest edit that does it. Keep everything else: the controls, the look, the language of the page. New elements follow the house style in the skill `studybooks-interactive`.
 3. The physics, the maths and the units must stay correct. If the request would make a formula or a number wrong, do it the correct way and say so in `changes`.
 4. If the request is not about this page, or cannot be done within the rules above, leave `page.html` as it is and say why in `changes`.
 

@@ -68,6 +68,11 @@ SKILLS = DATA / "skills"          # the skill every model call gets (Opus keeps 
 SKILL_NAME = "studybooks-material"
 SKILL_FILE = SKILLS / SKILL_NAME / "SKILL.md"
 SKILL_SEED = ROOT / "skills" / SKILL_NAME / "SKILL.md"    # shipped with the code: the first version
+# the same kind of skill for interactive pages (a copy of the house rules, made for pages): edited by hand in the code
+# folder, no learning, no live copy: every call that makes or changes a page gets it instead of the material skill
+PAGE_SKILL_NAME = "studybooks-interactive"
+PAGE_SKILL_FILE = ROOT / "skills" / PAGE_SKILL_NAME / "SKILL.md"
+PAGE_ROLES = ("interactive", "ipage", "ipage_edit")
 LEARN = DATA / "learn"            # work dirs of the learning sessions
 SUPERVISOR = STATE / "supervisor.json"
 TYPST = ROOT / "bin" / "typst"
@@ -1657,6 +1662,7 @@ SKILL_SECTIONS = ("General", "transcribe", "refs", "clean", "fuse")
 SKILL_MAX = 24000                  # characters of the whole file
 SKILL_SECTION_MAX = {"General": 3000}
 SKILL_SECTION_DEFAULT_MAX = 6000
+PAGE_GENERAL_MAX = 9000           # the page skill carries the whole house style in its General part
 _skill_cache = [None, None]        # (mtime, text)
 
 
@@ -1687,23 +1693,34 @@ def skill_sections(text):
     return out
 
 
+def page_skill_text():
+    try:
+        return PAGE_SKILL_FILE.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
 def agent_brief(role):
     """The skill text one model call gets: General + the section of its role (none for the learning session itself,
-    which reads the whole file as its input)."""
+    which reads the whole file as its input). The calls that make or change interactive pages get the page skill
+    instead of the material skill."""
     if role == "learn":
         return ""
-    secs = skill_sections(skill_text())
+    page = role in PAGE_ROLES
+    name, text = (PAGE_SKILL_NAME, page_skill_text()) if page else (SKILL_NAME, skill_text())
+    secs = skill_sections(text)
     parts = []
     if secs.get("General"):
-        parts.append(secs["General"][:SKILL_SECTION_MAX["General"]])
+        parts.append(secs["General"][:PAGE_GENERAL_MAX if page else SKILL_SECTION_MAX["General"]])
     key = {"repair": None}.get(role, role)
     if key and key != "General" and secs.get(key):
         parts.append(f"### For this task ({key})\n" + secs[key][:SKILL_SECTION_DEFAULT_MAX])
     ste = (PROMPTS / "ste.md").read_text(encoding="utf-8") if (PROMPTS / "ste.md").exists() else ""
     if not parts and not ste:
         return ""
-    return (f"# Skill `{SKILL_NAME}` (loaded automatically: the house rules of this study-book system, learned from "
-            "earlier uploads; the task below still decides what to write)\n\n" + "\n\n".join(parts + ([ste.strip()] if ste else [])))
+    what = "the house rules and the house style of the interactive pages" if page else "the house rules of this study-book system, learned from earlier uploads"
+    return (f"# Skill `{name}` (loaded automatically: {what}; the task below still decides what to write)\n\n"
+            + "\n\n".join(parts + ([ste.strip()] if ste else [])))
 
 
 def render_prompt(name, **kw):
@@ -2896,7 +2913,7 @@ def process_request(sp, rpath):
                            topics=topics, refs=" and ".join(map(str, ref_dirs(sp))), refs_list=refs_brief(sp),
                            resume=RESUME_NOTE.format(f=out_name) if cut else "")
     try:
-        run_llm(sp, prompt, work, add_dirs=ref_dirs(sp))
+        run_llm(sp, prompt, work, add_dirs=ref_dirs(sp), role=None if kind == "explain" else "interactive")
     except CallTimeout:
         (work / ".cut").touch()
         if not file_usable(work / out_name):

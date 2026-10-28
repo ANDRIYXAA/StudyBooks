@@ -64,6 +64,28 @@ check("... and not the other sections", "For this task (clean)" not in t and "Co
 check("a call without a role gets General only", "Pandoc Markdown" in sb.agent_brief(None) and "For this task" not in sb.agent_brief(None))
 check("the learning call gets no brief (it reads the whole file)", sb.agent_brief("learn") == "")
 check("the brief stays small", len(sb.agent_brief("transcribe")) < 9000, len(sb.agent_brief("transcribe")))
+
+# the page skill: the calls that make or change interactive pages get it instead of the material skill
+page_seed = sb.PAGE_SKILL_FILE.read_text(encoding="utf-8")
+check("the page skill is a real skill (frontmatter) and a copy of the material skill's shape", page_seed.startswith("---\nname: studybooks-interactive\ndescription: ")
+      and set(sb.skill_sections(page_seed)) == {"General", "interactive", "ipage", "ipage_edit"}, sorted(sb.skill_sections(page_seed)))
+for role in sb.PAGE_ROLES:
+    pb = sb.agent_brief(role)
+    check(f"role {role} gets the page skill with the house style and its own section",
+          "studybooks-interactive" in pb and "--bg:#0b0b0b" in pb and f"For this task ({role})" in pb and "Pandoc Markdown" not in pb and "ASD-STE100" in pb, pb[:80])
+check("the page brief stays small", all(len(sb.agent_brief(r)) < 12000 for r in sb.PAGE_ROLES), [len(sb.agent_brief(r)) for r in sb.PAGE_ROLES])
+check("the other roles still get the material skill", "studybooks-material" in sb.agent_brief("clean") and "--bg:#0b0b0b" not in sb.agent_brief("clean"))
+roles_seen = []
+_real_run_llm = sb.run_llm
+sb.run_llm = lambda sp, prompt, cwd, *a, **k: (roles_seen.append(k.get("role")), _real_run_llm(sp, prompt, cwd, *a, **k))[1]
+_sp = sb.Space("page-skill-user").ensure(login="ps@example.com", name=None)
+for _kind in ("interactive", "explain"):
+    _rid = "rq-" + _kind
+    sb.write_json(_sp.d["requests"] / f"{_rid}.json", {"id": _rid, "kind": _kind, "subject": "math1", "topic": "", "text": "a spring",
+                                                       "created": sb.now_iso()})
+    sb.process_request(_sp, _sp.d["requests"] / f"{_rid}.json")
+sb.run_llm = _real_run_llm
+check("a requested page runs with the page role, an explanation without a role", roles_seen == ["interactive", None], roles_seen)
 for name, bad in [("no frontmatter", seed.split("---", 2)[2]), ("a link", seed + "\nsee https://x.example\n"),
                   ("HTML", seed.replace("## refs", "<script>x</script>\n## refs")), ("a lost section", seed.replace("## fuse", "## fusion")),
                   ("too long", seed + "x" * sb.SKILL_MAX), ("most thrown away", seed[:900] + "\n## General\nx\n## transcribe\nx\n## refs\nx\n## clean\nx\n## fuse\nx\n")]:
