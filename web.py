@@ -690,6 +690,101 @@ def require_subject(sp: sb.Space, subject: str) -> None:
         raise HTTPException(400, L("невідомий предмет", "unknown subject"))
 
 
+class Received:
+    """The files of one upload as they were stored: stored names, the names the person's files had, their hashes, and
+    the files that were left out because they are known already."""
+
+    def __init__(self):
+        self.names, self.originals, self.digests = [], [], []
+        self.skipped, self.skipped_by = [], []
+
+    def take(self, index: list) -> tuple:
+        """Remove the files at these positions and give them back as (names, originals, digests)."""
+        taken = tuple([part[i] for i in index] for part in (self.names, self.originals, self.digests))
+        for i in sorted(index, reverse=True):
+            del self.names[i], self.originals[i], self.digests[i]
+        return taken
+
+
+def class_day(kind: str, date: str) -> str | None:
+    """The day of the class an upload belongs to (a textbook has none; everything else is filed under its day)."""
+    if kind == "reference":
+        return None
+    try:
+        return sb.check_class_date(date) if date.strip() else sb.now().date().isoformat()
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+async def check_public_limits(sp: sb.Space) -> None:
+    """Anyone with the link can sign up, so one account cannot fill the disk or the queue."""
+    if await run_in_threadpool(space_bytes, sp) > PUBLIC_QUOTA:
+        raise HTTPException(413, L("у твоєму просторі вже забагато даних (понад 3 ГБ)", "your space already holds too much data (over 3 GB)"))
+    if sum(1 for d in sp.d["inbox"].iterdir() if d.is_dir() and not d.name.startswith(".")) >= PUBLIC_MAX_QUEUED:
+        raise HTTPException(429, L("у черзі вже забагато завантажень, дочекайся обробки", "too many uploads are waiting in the queue, wait until they are processed"))
+
+
+def check_asis_upload(sp: sb.Space, subject: str, files: list) -> None:
+    """A PDF kept as it is needs a subject and only PDF files."""
+    if not subject.strip():
+        raise HTTPException(400, L("для PDF без редагування обери предмет", "choose a subject for a PDF as is"))
+    if any(not (uf.filename or "").lower().endswith(".pdf") for uf in files):
+        raise HTTPException(400, L("без редагування приймаються тільки PDF", "only PDF files are accepted as is"))
+    require_subject(sp, subject)
+
+
+async def receive_files(sp: sb.Space, kind: str, files: list, tmp: Path) -> Received:
+    """Store the files in `tmp`, within MAX_UPLOAD; a file that is already known (also from somebody else) is dropped."""
+    got, total = Received(), 0
+    for i, uf in enumerate(files, 1):
+        name = safe_name(uf.filename, i)
+        h = hashlib.sha256()
+        with open(tmp / name, "wb") as out:
+            while chunk := await uf.read(1 << 20):
+                total += len(chunk)
+                if total > MAX_UPLOAD:
+                    lim = f"{MAX_UPLOAD // 1024 ** 2} МБ" if MAX_UPLOAD < 1024 ** 3 else "1 ГБ"
+                    raise HTTPException(413, L(f"завелике завантаження (більше {lim})",
+                                               f"upload too large (over {lim.replace('МБ', 'MB').replace('ГБ', 'GB')})"))
+                h.update(chunk)
+                out.write(chunk)
+        digest = h.hexdigest()
+        dup = None if digest in got.digests else sb.find_duplicate(sp, kind, digest)
+        if digest in got.digests or dup:      # the same file again: it is not processed twice
+            (tmp / name).unlink()
+            got.skipped.append(uf.filename or name)
+            if dup and dup.get("by"):
+                got.skipped_by.append({"file": uf.filename or name, "by": dup["by"]})
+            continue
+        got.names.append(name)
+        got.originals.append(uf.filename)
+        got.digests.append(digest)
+    return got
+
+
+def interactive_files(kind: str, tmp: Path, names: list) -> list:
+    """Positions of the files that are interactive pages (or React source): the model fixes and files those."""
+    if kind != "notes":
+        return []
+    return [i for i, n in enumerate(names)
+            if Path(n).suffix.lower() in sb.JSX_EXT
+            or (Path(n).suffix.lower() in sb.HTML_EXT and sb.looks_interactive(sb.read_html(tmp / n)))]
+
+
+def submission_record(sid: str, kind: str, names: list, originals: list, label: str, day, form: dict, skipped: list) -> dict:
+    return {"id": sid, "uploaded_at": sb.now_iso(), "files": names, "note": form["note"].strip(), "subject": form["subject"].strip(),
+            "kind": kind, "label": label, "date": day,
+            "topic": sb.slugify(form["topic"], 40) if form["topic"].strip() else "",
+            "topic_title": form["topic_title"].strip()[:80], "original_names": originals, "skipped_duplicates": skipped}
+
+
+def queue_upload(sp: sb.Space, kind: str, folder: Path, sid: str, record: dict, digests: list) -> None:
+    """Write the record, move the folder into the inbox and remember the files (so the same file is not sent twice)."""
+    sb.write_json(folder / "submission.json", record)
+    folder.rename(sp.d["inbox"] / sid)
+    sb.remember_files(sp, kind, sid, record["label"], digests)
+
+
 @app.post("/api/upload")
 async def api_upload(request: Request, files: list[UploadFile] = File([]), note: str = Form(""),
                      subject: str = Form(""), kind: str = Form("notes"), topic: str = Form(""),
@@ -704,94 +799,44 @@ async def api_upload(request: Request, files: list[UploadFile] = File([]), note:
         files.append(pasted_page(code))
     if not files:
         raise HTTPException(400, L("немає що завантажувати", "nothing to upload"))
-    if PUBLIC:      # anyone with the link can sign up, so one account cannot fill the disk or the queue
-        if await run_in_threadpool(space_bytes, sp) > PUBLIC_QUOTA:
-            raise HTTPException(413, L("у твоєму просторі вже забагато даних (понад 3 ГБ)", "your space already holds too much data (over 3 GB)"))
-        if sum(1 for d in sp.d["inbox"].iterdir() if d.is_dir() and not d.name.startswith(".")) >= PUBLIC_MAX_QUEUED:
-            raise HTTPException(429, L("у черзі вже забагато завантажень, дочекайся обробки", "too many uploads are waiting in the queue, wait until they are processed"))
-    day = None
-    if kind != "reference":     # a textbook has no class date; everything else is filed under the day it was held
-        try:
-            day = sb.check_class_date(date) if date.strip() else sb.now().date().isoformat()
-        except ValueError as e:
-            raise HTTPException(400, str(e))
+    if PUBLIC:
+        await check_public_limits(sp)
+    day = class_day(kind, date)
     if kind == "asis":
-        if not subject.strip():
-            raise HTTPException(400, L("для PDF без редагування обери предмет", "choose a subject for a PDF as is"))
-        if any(not (uf.filename or "").lower().endswith(".pdf") for uf in files):
-            raise HTTPException(400, L("без редагування приймаються тільки PDF", "only PDF files are accepted as is"))
-        require_subject(sp, subject)
+        check_asis_upload(sp, subject, files)
+    form = {"note": note, "subject": subject, "topic": topic, "topic_title": topic_title}
     sid = sb.new_id()
     tmp = sp.d["inbox"] / f".tmp-{sid}"
     tmp.mkdir(parents=True)
-    names, originals, digests, skipped, skipped_by, total = [], [], [], [], [], 0
-    isid = itmp = None          # the folder of the interactive pages, once there are any (the cleanup below needs it)
+    itmp = None                 # the folder of the interactive pages, once there are any (the cleanup below needs it)
     try:
-        for i, uf in enumerate(files, 1):
-            name = safe_name(uf.filename, i)
-            h = hashlib.sha256()
-            with open(tmp / name, "wb") as out:
-                while chunk := await uf.read(1 << 20):
-                    total += len(chunk)
-                    if total > MAX_UPLOAD:
-                        lim = f"{MAX_UPLOAD // 1024 ** 2} МБ" if MAX_UPLOAD < 1024 ** 3 else "1 ГБ"
-                        raise HTTPException(413, L(f"завелике завантаження (більше {lim})",
-                                                   f"upload too large (over {lim.replace('МБ', 'MB').replace('ГБ', 'GB')})"))
-                    h.update(chunk)
-                    out.write(chunk)
-            d = h.hexdigest()
-            dup = None if d in digests else sb.find_duplicate(sp, kind, d)
-            if d in digests or dup:    # the same file again (also from somebody else): it is not processed twice
-                (tmp / name).unlink()
-                skipped.append(uf.filename or name)
-                if dup and dup.get("by"):
-                    skipped_by.append({"file": uf.filename or name, "by": dup["by"]})
-                continue
-            names.append(name)
-            originals.append(uf.filename)
-            digests.append(d)
-        ia = []                 # interactive pages (and React source) go to the model, which fixes and files them
-        if kind == "notes":
-            for i, n in enumerate(names):
-                ext = Path(n).suffix.lower()
-                if ext in sb.JSX_EXT or (ext in sb.HTML_EXT and sb.looks_interactive(sb.read_html(tmp / n))):
-                    ia.append(i)
+        got = await receive_files(sp, kind, files, tmp)
+        ia = interactive_files(kind, tmp, got.names)
+        isid = ilabel = idigests = None
         if ia:
             if subject.strip():
                 require_subject(sp, subject)
             isid = sb.new_id()
             itmp = sp.d["inbox"] / f".tmp-{isid}"
             itmp.mkdir(parents=True)
-            inames, iorig, idig = [names[i] for i in ia], [originals[i] for i in ia], [digests[i] for i in ia]
+            inames, iorig, idigests = got.take(ia)
             for n in inames:
                 shutil.move(str(tmp / n), str(itmp / n))
-            for i in sorted(ia, reverse=True):
-                del names[i], originals[i], digests[i]
             ilabel = note.strip()[:80] or (iorig[0] if len(inames) == 1 else L(f"{len(inames)} інтерактивних сторінок", f"{len(inames)} interactive pages"))
-            sb.write_json(itmp / "submission.json", {
-                "id": isid, "uploaded_at": sb.now_iso(), "files": inames, "note": note.strip(), "subject": subject.strip(),
-                "kind": "ipage", "label": ilabel, "date": day, "topic": sb.slugify(topic, 40) if topic.strip() else "",
-                "topic_title": topic_title.strip()[:80], "original_names": iorig, "skipped_duplicates": []})
-        if not names and not ia:
-            who_ = ", ".join(sorted({x["by"] for x in skipped_by}))
+            irecord = submission_record(isid, "ipage", inames, iorig, ilabel, day, form, [])
+        if not got.names and not ia:
+            who_ = ", ".join(sorted({x["by"] for x in got.skipped_by}))
             raise HTTPException(409, L("усі ці файли вже завантажені раніше, нічого нового", "all these files were uploaded before, nothing new")
                                 + (L(f" (їх уже додав(-ла): {who_})", f" (already added by: {who_})") if who_ else ""))
         sids = []
-        if names:
-            label = note.strip()[:80] or (originals[0] if len(names) == 1 else L(f"{len(names)} файлів", f"{len(names)} files"))
-            sb.write_json(tmp / "submission.json", {
-                "id": sid, "uploaded_at": sb.now_iso(), "files": names, "note": note.strip(),
-                "subject": subject.strip(), "kind": kind, "label": label, "date": day,
-                "topic": sb.slugify(topic, 40) if topic.strip() else "", "topic_title": topic_title.strip()[:80],
-                "original_names": originals, "skipped_duplicates": skipped})
-            tmp.rename(sp.d["inbox"] / sid)
-            sb.remember_files(sp, kind, sid, label, digests)
+        if got.names:
+            label = note.strip()[:80] or (got.originals[0] if len(got.names) == 1 else L(f"{len(got.names)} файлів", f"{len(got.names)} files"))
+            queue_upload(sp, kind, tmp, sid, submission_record(sid, kind, got.names, got.originals, label, day, form, got.skipped), got.digests)
             sids.append(sid)
         else:
             shutil.rmtree(tmp, ignore_errors=True)
         if ia:
-            itmp.rename(sp.d["inbox"] / isid)
-            sb.remember_files(sp, kind, isid, ilabel, idig)
+            queue_upload(sp, kind, itmp, isid, irecord, idigests)
             sids.append(isid)
     except BaseException:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -799,7 +844,7 @@ async def api_upload(request: Request, files: list[UploadFile] = File([]), note:
             shutil.rmtree(itmp, ignore_errors=True)
         raise
     kick()
-    return {"ok": True, "id": sids[0], "files": len(names), "skipped": skipped, "skipped_by": skipped_by,
+    return {"ok": True, "id": sids[0], "files": len(got.names), "skipped": got.skipped, "skipped_by": got.skipped_by,
             "interactive": len(ia)}
 
 
