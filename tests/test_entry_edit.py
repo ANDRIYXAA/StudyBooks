@@ -43,12 +43,12 @@ other.ensure(login="other", name=None)
 lib = main.d["library"] / "math1" / "numbers"
 
 
-def make(name, by=None, asis=False):
+def make(name, by=None, asis=False, hour=10):
     e = lib / name
     e.mkdir(parents=True, exist_ok=True)
     sb.write_json(e / "meta.json", {"title": "Complex numbers " + name, "title_original": "x", "lang_original": "en", "kind": "lecture",
                                     "subject": "math1", "topic": "numbers", "topic_title": "Numbers", "date": "2026-10-05",
-                                    "added": sb.now_iso(), "order": 1, "note": "", "pages": [], "figures": []}
+                                    "added": f"2026-10-05T{hour}:00:00+02:00", "order": 1, "note": "", "pages": [], "figures": []}
                   | ({"by": by} if by else {}) | ({"asis": True} if asis else {}))
     if not asis:
         (e / "clean.md").write_text(TEXT, encoding="utf-8")
@@ -56,7 +56,7 @@ def make(name, by=None, asis=False):
     return e
 
 
-own, gst, asis = make("e-owner"), make("e-guest", by="pub-guest"), make("e-asis", asis=True)
+own, gst, asis = make("e-owner"), make("e-guest", by="pub-guest", hour=11), make("e-asis", asis=True, hour=12)
 
 
 def call(path, sp, body):
@@ -200,5 +200,95 @@ rp.unlink(missing_ok=True)
 ask(main, "e-owner")
 err, rp = run(main)
 check("the owner changes their own section", err is None and "Remark added" in (own / "clean.md").read_text(encoding="utf-8"), err)
+# ---- the Edit button of the whole book (kind book_edit)
+def reset():
+    for e, by in ((own, None), (gst, "pub-guest")):
+        (e / "clean.md").write_text(TEXT, encoding="utf-8")
+        (e / "clean.prev.md").unlink(missing_ok=True)
+        m = sb.read_json(e / "meta.json")
+        m.pop("edits", None)
+        m.pop("edited", None)
+        m.pop("by", None)
+        sb.write_json(e / "meta.json", m | ({"by": by} if by else {}))
+    for sp_ in (main, guest, other):
+        for p in sp_.d["requests"].glob("*.json"):
+            p.unlink()
+
+
+def book_ask(sp, subject="math1", text="in the lecture replace the example"):
+    try:
+        return asyncio.run(web.api_request(call("/api/request", sp, {"kind": "book_edit", "subject": subject, "text": text}))), None
+    except web.HTTPException as e:
+        return None, e.status_code
+
+
+def txt(e):
+    return (e / "clean.md").read_text(encoding="utf-8")
+
+
+reset()
+j, err = book_ask(other)
+check("book edit: a person with no sections of their own gets 404", err == 404, (j, err))
+j, err = book_ask(guest, "../x")
+check("... a path trick in the subject is 404", err == 404, (j, err))
+j, err = book_ask(guest, "nope")
+check("... an unknown subject is 404", err == 404, (j, err))
+j, err = book_ask(guest)
+check("a guest may ask for a change of the book", j and j["ok"] and queued(guest)[0]["kind"] == "book_edit", (j, err))
+j, err = book_ask(guest)
+check("... a second one for the same book waits", err == 409, (j, err))
+st = web.shared_view(guest, sb.status(guest))
+mk = next(x for x in st["subjects"] if x["id"] == "math1")["making"]
+check("the status lists it as a book edit", len(mk) == 1 and mk[0]["book_edit"] is True and mk[0]["entry_edit"] is None and not mk[0]["edit"], mk)
+check("the guest gets only the sections they may change", [m["title"] for _, m in sb.book_edit_sections(guest, sb.shared_target(guest), "math1")] == ["Complex numbers e-guest"])
+check("the owner gets every text section, in book order", [d.name for d, _ in sb.book_edit_sections(main, main, "math1")] == ["e-owner", "e-guest"])
+
+os.environ["FAKE_BEDIT"] = "ok"
+err, rp = run(guest)
+done = sb.read_json(guest.d["requests"] / "done" / rp.name)
+check("book edit by a guest: their section is changed, the owner's is not", err is None and "Book-wide remark" in txt(gst) and txt(own) == TEXT, err)
+check("... the old text is kept, the edit is logged with the batch", (gst / "clean.prev.md").read_text(encoding="utf-8") == TEXT
+      and sb.read_json(gst / "meta.json")["edits"][-1]["batch"] == rp.stem, sb.read_json(gst / "meta.json"))
+check("... the request is done and says what changed", done["changed"] == ["Complex numbers e-guest"] and done["skipped"] == [] and not rp.exists(), done)
+check("... no work folder is left", not list(guest.d["work"].glob("*")))
+
+reset()
+os.environ["FAKE_BEDIT"] = "two"
+book_ask(main)
+err, rp = run(main)
+check("book edit by the owner can change several sections", err is None and "Book-wide remark" in txt(own) and "Book-wide remark" in txt(gst), err)
+check("... each has its own undo step", (own / "clean.prev.md").exists() and (gst / "clean.prev.md").exists())
+
+reset()
+os.environ["FAKE_BEDIT"] = "partial"
+book_ask(main)
+err, rp = run(main)
+done = sb.read_json(main.d["requests"] / "done" / rp.name)
+check("a section that fails the checks is left as it was, the good ones are applied",
+      err is None and "Book-wide remark" in txt(own) and txt(gst) == TEXT and done["skipped"] == ["Complex numbers e-guest"] and done["changed"] == ["Complex numbers e-owner"], (err, done))
+
+reset()
+os.environ["FAKE_BEDIT"] = "retry"
+book_ask(main)
+err, rp = run(main)
+check("a failed section gets a second try", err is None and "Fixed on the second try" in txt(gst) and "evil.example" not in txt(gst), err)
+
+for mode, name in (("none", "a change that changes nothing"), ("all_bad", "a change that only breaks the checks")):
+    reset()
+    os.environ["FAKE_BEDIT"] = mode
+    book_ask(main)
+    err, rp = run(main)
+    check("book edit: " + name + " is refused, the text stays", isinstance(err, sb.PermanentError) and txt(own) == TEXT and txt(gst) == TEXT, (mode, err))
+    check("... and no work folder is left", not list(main.d["work"].glob("*")))
+os.environ["FAKE_BEDIT"] = "ok"
+
+reset()
+book_ask(guest)
+rp = next(guest.d["requests"].glob("*.json"))
+sb.write_json(gst / "meta.json", sb.read_json(gst / "meta.json") | {"by": "pub-other"})
+err, _ = run(guest)
+check("book edit: the worker re-checks who may change what", isinstance(err, sb.PermanentError) and txt(gst) == TEXT, err)
+reset()
+
 print("\nFAILED: " + ", ".join(fails) if fails else "\nall ok")
 sys.exit(1 if fails else 0)

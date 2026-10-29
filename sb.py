@@ -2888,6 +2888,8 @@ def process_request(sp, rpath):
         return process_ipage_edit(sp, rpath)
     if r.get("kind") == "entry_edit":
         return process_entry_edit(sp, rpath)
+    if r.get("kind") == "book_edit":
+        return process_book_edit(sp, rpath)
     rid, kind, subj = r["id"], r["kind"], r["subject"]
     set_status(current=L("пояснення" if kind == "explain" else "інтерактивна сторінка",
                          "explanation" if kind == "explain" else "interactive page") + f": {r['text'][:60]}",
@@ -3104,6 +3106,25 @@ def entry_edit_problem(old, new):
     return None
 
 
+def entry_new_problem(tgt, d, meta, old, new):
+    """English reason why `new` may not replace the clean text of one section (the cheap checks, then the typesetting)."""
+    problem = entry_edit_problem(old, new)
+    if not problem:
+        try:
+            typesets(tgt, d, new, meta.get("figures"))
+        except ValueError as e:
+            problem = "the text cannot be typeset into the PDF: " + " ".join(str(e).split())[:300]
+    return problem
+
+
+def write_entry_edit(sp, d, meta, old, new, request, changes, batch=None):
+    """Put a checked text into a section; the text before it stays as `clean.prev.md` (one step back)."""
+    atomic_write(d / "clean.prev.md", old)
+    atomic_write(d / "clean.md", new)
+    entry = {"at": now_iso(), "by": sp.uid, "request": request[:300]} | ({"batch": batch} if batch else {})
+    write_json(d / "meta.json", meta | {"edited": now_iso(), "edit_changes": changes, "edits": (meta.get("edits") or [])[-9:] + [entry]})
+
+
 def process_entry_edit(sp, rpath):
     """A change to one section of the clean book on the person's request. The model edits a copy of `clean.md`; code
     checks it (size, what was removed, links, figures, typesetting) and keeps the old text as `clean.prev.md` (one step back)."""
@@ -3140,12 +3161,7 @@ def process_entry_edit(sp, rpath):
             p = work / "clean.md"
             new = p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""
             res = read_json(work / "result.json", {}) or {}
-            problem = entry_edit_problem(old, new)
-            if not problem:
-                try:
-                    typesets(tgt, d, new, meta.get("figures"))
-                except ValueError as e:
-                    problem = "the text cannot be typeset into the PDF: " + " ".join(str(e).split())[:300]
+            problem = entry_new_problem(tgt, d, meta, old, new)
             if not problem:
                 break
             log(f"[{sp.uid}] {rid}: round {rnd + 1} of the book-edit check failed: {problem[:160]}")
@@ -3154,10 +3170,7 @@ def process_entry_edit(sp, rpath):
             why = problem if problem != "nothing was changed" or not changes else changes[0]
             raise PermanentError(L(f"правку не застосовано: {why[:200]}", f"the edit was not applied: {why[:200]}"))
         changes = [str(c)[:200] for c in (res.get("changes") if isinstance(res.get("changes"), list) else [])][:12]
-        atomic_write(d / "clean.prev.md", old)
-        atomic_write(f, new)
-        log_ = (meta.get("edits") or [])[-9:] + [{"at": now_iso(), "by": sp.uid, "request": r["text"][:300]}]
-        write_json(d / "meta.json", meta | {"edited": now_iso(), "edit_changes": changes, "edits": log_})
+        write_entry_edit(sp, d, meta, old, new, r["text"], changes)
         r["done_at"] = now_iso()
         write_json(sp.d["requests"] / "done" / rpath.name, r)
         rpath.unlink()
@@ -3165,6 +3178,80 @@ def process_entry_edit(sp, rpath):
         shutil.rmtree(work, ignore_errors=True)
     tgt.mark_dirty(subj)
     tgt.git_commit(f"book {subj}/{d.name}: changed on request")
+
+
+def book_edit_sections(sp, tgt, subj):
+    """The sections of a subject's clean book this person may change, in book order: [(directory, meta)]."""
+    return [(m["dir"], m) for m in entries_of(tgt, subj)
+            if not m.get("asis") and (m["dir"] / "clean.md").exists() and can_edit_entry(sp, tgt, m)]
+
+
+def process_book_edit(sp, rpath):
+    """A change to the clean book of a whole subject on the person's request ("Edit" at the top of the book). The model
+    gets a copy of every section the person may change and edits the ones the request is about; each changed section goes
+    through the same checks as a one-section edit. Sections that pass are applied, the others stay as they were."""
+    r = read_json(rpath)
+    rid, subj = r["id"], r["subject"]
+    set_status(current=L("правка книги", "book edit") + f": {r['text'][:60]}", current_uid=sp.uid, current_since=now_iso(),
+               current_subject=subj, current_phase="book_edit", current_rid=rid,
+               **(clear_progress() | {"cur_item": rid, "cur_pass": "book_edit", "cur_pass_since": now_iso()}))
+    tgt = shared_target(sp)
+    s = find_subject(tgt.load_syllabus(), subj)
+    secs = book_edit_sections(sp, tgt, subj) if s else []
+    if not secs:
+        raise PermanentError(L("у цій книзі немає розділів, які ти можеш змінити", "this book has no sections you may change"))
+    work = sp.d["work"] / rid
+    shutil.rmtree(work, ignore_errors=True)
+    work.mkdir(parents=True)
+    old, index = {}, []
+    for i, (d, m) in enumerate(secs, 1):
+        name = f"s{i:02d}.md"
+        old[name] = (d / "clean.md").read_text(encoding="utf-8")
+        (work / name).write_text(old[name], encoding="utf-8")
+        index.append(f"- `{name}`: {m['title']} (class of {m['date']}, topic {m.get('topic_title') or m['topic']})")
+    (work / "index.md").write_text("\n".join(index) + "\n", encoding="utf-8")
+    dirs = {f"s{i:02d}.md": (d, m) for i, (d, m) in enumerate(secs, 1)}
+    good, bad, res = {}, {}, {}
+    try:
+        for rnd in range(ENTRY_EDIT_ROUNDS):
+            note = "" if rnd == 0 else (f"This is attempt {rnd + 1}: some of your changed files failed the checker. The files hold your "
+                                        "last version; fix only the files named below, do not start over, and leave the others as they are.")
+            probs = "" if not bad else ("Problems the automatic checker found. Fix every one:\n"
+                                        + "\n".join(f"- `{n}`: {pr}" for n, pr in bad.items()))
+            prompt = render_prompt("book_edit.md", subject=s["title"], request=r["text"], problems=probs, round_note=note,
+                                   refs=" and ".join(map(str, ref_dirs(sp))), refs_list=refs_brief(sp))
+            run_llm(sp, prompt, work, add_dirs=ref_dirs(sp), role="clean")
+            res = read_json(work / "result.json", {}) or {}
+            good, bad = {}, {}
+            for name, (d, m) in dirs.items():
+                p = work / name
+                new = p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""
+                if new == old[name]:
+                    continue
+                pr = entry_new_problem(tgt, d, m, old[name], new)
+                if pr:
+                    bad[name] = pr
+                else:
+                    good[name] = new
+            if not bad:
+                break
+            log(f"[{sp.uid}] {rid}: round {rnd + 1} of the book-edit check: {len(bad)} section(s) failed, e.g. {next(iter(bad.values()))[:120]}")
+        changes = [str(c)[:200] for c in (res.get("changes") if isinstance(res.get("changes"), list) else [])][:12]
+        if not good:
+            why = next(iter(bad.values())) if bad else (changes[0] if changes else "nothing was changed")
+            raise PermanentError(L(f"правку не застосовано: {why[:200]}", f"the edit was not applied: {why[:200]}"))
+        for name, new in good.items():
+            d, m = dirs[name]
+            write_entry_edit(sp, d, read_json(d / "meta.json"), old[name], new, r["text"], changes, batch=rid)  # `m` carries `dir` and `date` from entries_of
+        r |= {"done_at": now_iso(), "changed": [dirs[n][1]["title"] for n in good], "skipped": [dirs[n][1]["title"] for n in bad]}
+        write_json(sp.d["requests"] / "done" / rpath.name, r)
+        rpath.unlink()
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    tgt.mark_dirty(subj)
+    tgt.git_commit(f"book {subj}: {len(good)} section(s) changed on request")
+    if bad:
+        log(f"[{sp.uid}] {rid}: {len(bad)} changed section(s) left as they were because of failed checks")
 
 
 def undo_entry_edit(sp, subj, topic, entry):
@@ -5511,10 +5598,11 @@ def waiting_work(sp, st, prof, busy_here):
         m = read_json(item_meta_path(kind, path), {}) or {}
         if m.get("kind") == "reference":
             continue
-        if kind == "req" and m.get("kind") in ("interactive", "ipage_edit", "entry_edit") and m.get("subject"):     # a page on its way, or a change to one
+        if kind == "req" and m.get("kind") in ("interactive", "ipage_edit", "entry_edit", "book_edit") and m.get("subject"):     # a page on its way, or a change to one
             making.setdefault(m["subject"], []).append({
                 "text": str(m.get("text") or "")[:80], "edit": m.get("kind") == "ipage_edit",
                 "entry_edit": {"topic": m.get("topic"), "entry": m.get("entry")} if m.get("kind") == "entry_edit" else None,
+                "book_edit": m.get("kind") == "book_edit",
                 "id": m.get("id"), "queued_by_hand": m.get("id") in run_now,
                 "running": bool(busy_here and st.get("current_phase") == m.get("kind") and st.get("current_rid") == m.get("id"))})
         subj = m.get("subject") or (m.get("target") or {}).get("subject")

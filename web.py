@@ -881,9 +881,16 @@ async def api_request(request: Request):
     sp = who(request)
     body = await request.json()
     kind, subject, text = body.get("kind"), body.get("subject", ""), (body.get("text") or "").strip()
-    if kind not in ("explain", "interactive", "ipage_edit", "entry_edit") or not subject or not text:
+    if kind not in ("explain", "interactive", "ipage_edit", "entry_edit", "book_edit") or not subject or not text:
         raise HTTPException(400, L("потрібні тип, предмет і текст запиту", "type, subject and request text are required"))
     extra = {}
+    if kind == "book_edit":                     # a change somewhere in the shared clean book of one subject
+        tgt = sb.shared_target(sp)
+        if not sb.SAFE_ID.match(subject) or ".." in subject or not sb.book_edit_sections(sp, tgt, subject):
+            raise HTTPException(404, L("у цій книзі немає розділів, які ти можеш змінити", "this book has no sections you may change"))
+        if any(x.get("kind") == "book_edit" and x.get("subject") == subject
+               for x in (sb.read_json(p, {}) or {} for p in sp.d["requests"].glob("*.json"))):
+            raise HTTPException(409, L("зміна цієї книги вже чекає в черзі", "a change to this book is already waiting in the queue"))
     if kind == "entry_edit":                    # a change to one section of the shared clean book
         tgt = sb.shared_target(sp)
         topic, entry = str(body.get("topic") or ""), str(body.get("entry") or "")
@@ -963,7 +970,7 @@ def api_request_run(request: Request, rid: str):
         raise HTTPException(400)
     r = sb.read_json(sp.d["requests"] / f"{rid}.json", None)
     upload = (sp.d["inbox"] / rid / "submission.json").exists()
-    if not upload and (not isinstance(r, dict) or r.get("kind") not in ("interactive", "explain", "ipage_edit", "entry_edit")):
+    if not upload and (not isinstance(r, dict) or r.get("kind") not in ("interactive", "explain", "ipage_edit", "entry_edit", "book_edit")):
         raise HTTPException(404, L("такого запиту в черзі немає", "no such request in the queue"))
     if sp.paused():
         sp.update_profile(run_now=sorted(sp.run_now_ids() | {rid}))

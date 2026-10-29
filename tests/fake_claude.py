@@ -180,6 +180,29 @@ elif "look after the MAIN study book" in prompt:
         add = "<p>Merged note: |z| = 0 iff z = 0.</p>" if html else "\n\nMerged note: $|z| = 0$ iff $z = 0$.\n"
         (cwd / f"new{f.suffix}").write_text(text.replace("</body>", add + "</body>") if html else text + add, encoding="utf-8")
         (cwd / "result.json").write_text(json.dumps({"verdict": "merge", "match": f.name, "reason": "Підходить: доповнює розділ.", "summary": "Adds a note."}))
+elif "A student asks for a change somewhere in their clean study book" in prompt:
+    mode = os.environ.get("FAKE_BEDIT", "ok")
+    files = sorted(cwd.glob("s[0-9][0-9].md"))
+
+    def bedit(f, extra):
+        f.write_text(f.read_text(encoding="utf-8") + extra, encoding="utf-8")
+    if mode in ("ok", "two", "partial", "retry") and files:
+        bedit(files[0], "\nBook-wide remark: $|z| = 0$ iff $z = 0$.\n")
+    if mode in ("two", "partial", "retry") and len(files) > 1:
+        if mode == "two":
+            bedit(files[1], "\nBook-wide remark: $|z| = 0$ iff $z = 0$.\n")
+        elif mode == "partial" or not (cwd / ".tried").exists():       # a link: the checker refuses this file
+            (cwd / ".tried").write_text("1")
+            bedit(files[1], "\nSee [this](https://evil.example/x).\n")
+        else:
+            f = files[1]
+            f.write_text(f.read_text(encoding="utf-8").replace("\nSee [this](https://evil.example/x).\n", "") + "\nFixed on the second try.\n", encoding="utf-8")
+    if mode == "all_bad" and files:
+        bedit(files[0], "\nSee [this](https://evil.example/x).\n")
+    (cwd / "result.json").write_text(json.dumps({"changes": ["s01.md: added a remark"] if mode != "none" else []}), encoding="utf-8")
+    if os.environ.get("FAKE_SEEN"):
+        with open(os.environ["FAKE_SEEN"], "a", encoding="utf-8") as _f:
+            _f.write(prompt + "\n=====\n")
 elif "A student asks for a change to one chapter section" in prompt:
     mode = os.environ.get("FAKE_EEDIT", "ok")
     md = cwd / "clean.md"

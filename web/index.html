@@ -98,6 +98,8 @@ ul.list li.ipg { align-items: center; padding: 12px 0; }
 .ipg .ipt { flex: 1 1 0; min-width: 8em; }
 .ipg .ipb { flex: none; display: inline-flex; gap: 6px; }
 .ipe { flex: 1 0 100%; }
+.bedit { margin-left: auto; }
+.bebox { margin-top: 12px; }
 .ipe textarea { min-height: 76px; }
 .ipe .row { margin-top: 8px; }
 .gbtn > a:not(.btn) { text-decoration: none; color: var(--bt); }
@@ -751,6 +753,9 @@ const D = [
   ["ipg.ph", "Що змінити на цій сторінці? Наприклад: додай повзунок для маси, зроби графік більшим", "What should change on this page? For example: add a slider for the mass, make the plot bigger"],
   ["act.entry_edit", "Claude правит розділ книги…", "Claude is editing the book section…"],
   ["ee.edit", "Edit", "Edit"],
+  ["act.book_edit", "Claude правит книгу…", "Claude is editing the book…"],
+  ["be.ph", "Що змінити в книзі і як? Опиши: де саме (лекція, тема, приклад) і що зробити. Наприклад: у лекції про комплексні числа заміни всі приклади з z = 3 + 4i на z = 5 + 12i і перерахуй відповіді",
+   "What should change in the book, and how? Say where (class, topic, example) and what to do. For example: in the lecture on complex numbers, replace every example with z = 3 + 4i by z = 5 + 12i and recalculate the answers"],
   ["ee.undo", "Скасувати правку", "Undo edit"],
   ["ee.undone", "Правку скасовано (або повернено). Книги перезберуться за кілька хвилин.", "The edit was undone (or redone). The books will rebuild in a few minutes."],
   ["ee.ph", "Що змінити в цьому розділі чистої книги? Наприклад: виправ формулу в прикладі 2, додай пояснення кроку з похідною", "What should change in this section of the clean book? For example: fix the formula in example 2, explain the derivative step"],
@@ -1707,9 +1712,11 @@ function render() {
         ${b.clean ? `<a class="btn primary" href="${b.clean.url}" target="_blank">${esc(t("books.clean", mb(b.clean.bytes)))}</a>` : (s.activity ? "" : `<span class="muted small">${esc(t("books.building"))}</span>`)}
         ${b.original ? `<a class="btn" href="${b.original.url}" target="_blank">${esc(t("books.orig", mb(b.original.bytes)))}</a>` : ""}
         ${s.activity ? act(s.activity) : ""}
+        ${bookEditBtn(s)}
       </div>
-      ${s.interactive.length || s.making.some(q => !q.entry_edit) ? `<details open data-k="${esc(s.id)}-inter"><summary>${esc(t("books.inter", s.interactive.length))}</summary><ul class="list">${
-        s.making.filter(q => !q.entry_edit).map(q =>`<li><span>${q.edit ? esc(t("ipg.editing")) + " " : ""}${esc(q.text)}</span>${q.running ? act(q.edit ? "ipage_edit" : "interactive") : (S.paused && !q.queued_by_hand
+      ${bookEditBox(s)}
+      ${s.interactive.length || s.making.some(q => !q.entry_edit && !q.book_edit) ? `<details open data-k="${esc(s.id)}-inter"><summary>${esc(t("books.inter", s.interactive.length))}</summary><ul class="list">${
+        s.making.filter(q => !q.entry_edit && !q.book_edit).map(q =>`<li><span>${q.edit ? esc(t("ipg.editing")) + " " : ""}${esc(q.text)}</span>${q.running ? act(q.edit ? "ipage_edit" : "interactive") : (S.paused && !q.queued_by_hand
           ? `<span class="muted small">${esc(t("req.paused"))}</span> <button class="btn small primary" type="button" onclick="runNow(this, '${esc(q.id)}')">${esc(t("req.runNow"))}</button>`
           : act("queued"))}</li>`).join("")}${
         s.interactive.map(i => ipageRow(s.id, i)).join("")}</ul></details>` : ""}
@@ -1853,6 +1860,33 @@ async function ipageUndo(subj, stem) {
 }
 
 /* ---------- clean book: the "Edit" button of a section asks for a change to its text ---------- */
+const BEO = {};         // books with the edit box open (subject id -> the text typed so far)
+function bookEditBtn(s) {
+  if (S.anon || !s.days.some(d => d.entries.some(e => e.can_edit && e.mine))) return "";
+  if (s.making.some(q => q.book_edit)) return `<span class="bedit">${s.making.find(q => q.book_edit).running ? act("book_edit") : act("queued")}</span>`;
+  return `<button class="btn bedit" type="button" aria-expanded="${s.id in BEO}" onclick="bookEditToggle('${esc(s.id)}')">${esc(t("ee.edit"))}</button>`;
+}
+function bookEditBox(s) {
+  if (!(s.id in BEO) || S.anon || s.making.some(q => q.book_edit)) return "";
+  return `<div class="ipe bebox"><textarea maxlength="2000" placeholder="${esc(t("be.ph"))}" oninput="BEO['${esc(s.id)}'] = this.value">${esc(BEO[s.id])}</textarea>
+    <div class="row"><button class="btn small primary" type="button" onclick="bookEditSend(this, '${esc(s.id)}')">${esc(t("ipg.send"))}</button>
+    <button class="btn small" type="button" onclick="bookEditToggle('${esc(s.id)}')">${esc(t("ipg.cancel"))}</button><span class="msg" role="status"></span></div></div>`;
+}
+function bookEditToggle(subj) {
+  if (subj in BEO) delete BEO[subj]; else BEO[subj] = "";
+  render();
+  document.querySelector(".bebox textarea")?.focus();
+}
+async function bookEditSend(b, subj) {
+  const msg = b.closest(".bebox").querySelector(".msg"), text = (BEO[subj] || "").trim();
+  if (!text) { msg.textContent = t("req.empty"); msg.className = "msg bad"; return; }
+  b.disabled = true;
+  const r = await fetch("/api/request", {method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({kind: "book_edit", subject: subj, text})});
+  if (r.ok) { delete BEO[subj]; refresh(); return; }
+  let d; try { d = (await r.json()).detail; } catch (err) { d = r.status; }
+  b.disabled = false; msg.textContent = t("add.error", d); msg.className = "msg bad";
+}
 const EEO = {};         // sections with the edit box open -> the text typed so far
 const eeKey = (subj, e) => [subj, e.topic, e.entry].join("/");
 function entryEditUi(s, e) {
