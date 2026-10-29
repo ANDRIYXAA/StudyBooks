@@ -577,6 +577,22 @@ def api_stop_soft(request: Request):
     return {"ok": True, "waiting": sp.soft_stopping()}
 
 
+@app.post("/api/turbo")
+async def api_turbo(request: Request):
+    """Turbo mode (header checkbox): the worker runs up to SB_TURBO_PARALLEL chunks of an upload at the same time. It reads
+    the flag before each chunk, so it also speeds up the upload that is running now. OpenRouter only: the Claude Code
+    limits are a different matter."""
+    sp = who(request)
+    body = await request.json()
+    on = bool((body if isinstance(body, dict) else {}).get("on"))
+    if on and sp.engine() != "openrouter":
+        raise HTTPException(409, L("Турбо працює лише з OpenRouter", "Turbo mode works with OpenRouter only"))
+    sp.update_profile(turbo=True if on else None)
+    if on:
+        kick()
+    return {"ok": True, "on": on}
+
+
 @app.post("/api/resume")
 def api_resume(request: Request):
     sp = who(request)

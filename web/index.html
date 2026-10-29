@@ -99,6 +99,11 @@ ul.list li.ipg { align-items: center; padding: 12px 0; }
 .ipg .ipb { flex: none; display: inline-flex; gap: 6px; }
 .ipe { flex: 1 0 100%; }
 .bedit { margin-left: auto; }
+.turbo { display: inline-flex; align-items: center; gap: 6px; font: 600 13px var(--sans); border: 1px solid var(--ink); padding: 3px 10px; cursor: pointer; color: var(--ink); user-select: none; }
+.turbo input { margin: 0; accent-color: var(--ink); cursor: pointer; }
+.turbo:has(input:checked) { background: var(--ink); color: var(--bg); }
+.turbo:has(input:checked) input { accent-color: var(--bg); }
+.turbo:has(input:focus-visible) { outline: 2px solid var(--ink); outline-offset: 2px; }
 .bebox { margin-top: 12px; }
 .ipe textarea { min-height: 76px; }
 .ipe .row { margin-top: 8px; }
@@ -286,6 +291,7 @@ input[type=number] { font: inherit; color: var(--ink); background: var(--bg); bo
   <span id="me" class="muted small"></span>
   <button class="btn small primary" id="loginBtn" type="button" hidden data-i18n="auth.signin"></button>
   <button class="btn small" id="logoutBtn" type="button" hidden data-i18n="auth.logout"></button>
+  <label class="turbo" id="turboWrap" hidden><input type="checkbox" id="turboBox"><span data-i18n="turbo.l"></span></label>
   <span class="engwrap"><button class="btn small" id="claudeBtn" type="button">Claude</button><div class="usage" id="usage"></div></span>
   <span class="langsw" role="group" aria-label="Language"><button type="button" data-lang="uk">UK</button><button type="button" data-lang="en">EN</button></span>
   <button class="btn small" id="themeBtn" type="button"></button>
@@ -636,6 +642,10 @@ const D = [
   ["add.codePh", "<!DOCTYPE html> …", "<!DOCTYPE html> …"],
   ["add.codeHelp", "З телефону: у артефакті натисни «Копіювати» і встав сюди. За посиланням на артефакт сайт не може отримати сторінку (потрібен вхід у claude.ai, а публічне посилання віддає лише оболонку).", "From a phone: press “Copy” in the artifact and paste it here. The site cannot fetch a page from an artifact link (it needs a claude.ai sign-in, and a public link returns only the app shell)."],
   ["add.noConn", "Немає з'єднання з сервером", "No connection to the server"],
+  ["turbo.l", "Турбо", "Turbo"],
+  ["turbo.tip", n => `Турбо: до ${n} порцій одного завантаження одночасно. Швидше, але швидше витрачається добовий ліміт безкоштовних запитів, і моделі частіше відповідають 429 (тоді черга сама переходить на іншу модель). Діє й на завантаження, що вже йде. Лише для OpenRouter.`,
+    n => `Turbo: up to ${n} chunks of one upload at the same time. Faster, but it uses up the daily limit of free requests sooner, and models answer 429 more often (the queue then moves to another model by itself). It also applies to an upload that is running now. OpenRouter only.`],
+  ["prog.par", (l, n) => `порції ${l} з ${n} · турбо`, (l, n) => `chunks ${l} of ${n} · turbo`],
   ["prog.chunk", (i, n, p) => `порція ${i} з ${n} · сторінки ${p}`, (i, n, p) => `chunk ${i} of ${n} · pages ${p}`],
   ["prog.done", (d, n) => `готово ${d} з ${n}`, (d, n) => `${d} of ${n} done`],
   ["prog.pages", n => `усього сторінок: ${n}`, n => `pages in total: ${n}`],
@@ -1613,6 +1623,14 @@ $("#stopBtn").onclick = async () => {
   await refresh();
   b.disabled = false;
 };
+$("#turboBox").onchange = async () => {
+  const box = $("#turboBox");
+  box.disabled = true;
+  const r = await fetch("/api/turbo", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({on: box.checked})});
+  if (!r.ok) { let d; try { d = (await r.json()).detail; } catch (e) {} alert(typeof d === "string" ? d : t("common.failed")); }
+  box.disabled = false;
+  await refresh();
+};
 $("#softBtn").onclick = async () => {
   const b = $("#softBtn");
   b.disabled = true;
@@ -1640,6 +1658,11 @@ function render() {
   document.querySelector(".engwrap").hidden = !!S.anon;
   setText($("#claudeBtn"), !E.ready ? t("btn.setup") : E.name === "openrouter" ? "OpenRouter: " + (E.openrouter.model === "auto:free" ? t("btn.free") : (E.openrouter.model || "")) : "Claude: " + (c.email || t("common.connected")),
           E.ready ? "btn small" : "btn small primary");
+
+  const tb = S.turbo || {};
+  $("#turboWrap").hidden = !!S.anon || !tb.available;
+  $("#turboBox").checked = !!tb.on;
+  $("#turboWrap").title = t("turbo.tip", tb.n || 3);
 
   const sb = $("#stopBtn");
   sb.hidden = !(S.paused || S.running_here || S.queue.length);
@@ -1768,7 +1791,8 @@ function progHTML(p) {
   const mins = iso => iso ? Math.max(0, Math.round((Date.now() - new Date(iso)) / 60000)) : null;
   const key = "prog.pass." + p.pass, pass = p.pass ? (T.uk[key] ? t(key) : p.pass) : t("prog.start");
   const head = [];
-  if (p.chunk && p.chunks) head.push(t("prog.chunk", p.chunk, p.chunks, p.pages || "?"));
+  if (p.active?.length > 1 && p.chunks) head.push(t("prog.par", p.active.join(", "), p.chunks));
+  else if (p.chunk && p.chunks) head.push(t("prog.chunk", p.chunk, p.chunks, p.pages || "?"));
   else if (p.total_pages) head.push(t("prog.pages", p.total_pages));
   const line2 = [pass];
   if (p.model) line2.push(t("prog.model", p.model));

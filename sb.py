@@ -42,11 +42,13 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import traceback
 import urllib.error
 import urllib.request
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from html import unescape
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -218,15 +220,21 @@ def slugify(s, maxlen=40):
     return (s[:maxlen].rstrip("-") or "x")
 
 
+# Turbo mode runs several chunks at once in threads of the one worker. Everything they share on disk (status, profile,
+# the OpenRouter state) is read, changed and written back, so those three steps take this lock.
+STATE_LOCK = threading.RLock()
+
+
 def set_status(**kw):
     """Every write is also the worker's heartbeat (`beat`): the supervisor stops a worker that has none for an hour."""
-    st = read_json(STATUS, {}) or {}
-    st.update(kw)
-    st["beat"] = now_iso()
-    write_json(STATUS, st)
+    with STATE_LOCK:
+        st = read_json(STATUS, {}) or {}
+        st.update(kw)
+        st["beat"] = now_iso()
+        write_json(STATUS, st)
 
 
-PROGRESS_KEYS = ("cur_item", "cur_members", "cur_chunk", "cur_chunks", "cur_pages", "cur_files", "cur_pass",
+PROGRESS_KEYS = ("cur_item", "cur_members", "cur_chunk", "cur_chunks", "cur_active", "cur_pages", "cur_files", "cur_pass",
                  "cur_pass_since", "cur_model", "cur_turn")
 
 
@@ -333,13 +341,18 @@ class Space:
         return read_json(self.profile, {}) or {}
 
     def update_profile(self, **kw):
-        p = self.prof()
-        for k, v in kw.items():
-            if v is None:
-                p.pop(k, None)
-            else:
-                p[k] = v
-        write_json(self.profile, p)
+        with STATE_LOCK:
+            p = self.prof()
+            for k, v in kw.items():
+                if v is None:
+                    p.pop(k, None)
+                else:
+                    p[k] = v
+            write_json(self.profile, p)
+
+    def turbo(self):
+        """Turbo mode (the header checkbox): several chunks of one upload at the same time. OpenRouter only."""
+        return bool(self.prof().get("turbo")) and self.engine() == "openrouter"
 
     def lang(self):
         l = self.prof().get("lang")
@@ -414,8 +427,9 @@ class Space:
 
     def note_work(self, chunks=0, usd=0.0):
         """Chunks finished and (Claude's own estimate of) dollars spent since the person last pressed "Continue"."""
-        b = self.prof().get("batch") or {}
-        self.update_profile(batch={"n": int(b.get("n") or 0) + chunks, "usd": round(float(b.get("usd") or 0) + usd, 4)})
+        with STATE_LOCK:
+            b = self.prof().get("batch") or {}
+            self.update_profile(batch={"n": int(b.get("n") or 0) + chunks, "usd": round(float(b.get("usd") or 0) + usd, 4)})
 
     def soft_stopping(self):
         """The person pressed "Stop after this chunk": the running chunk is finished, then the queue pauses."""
@@ -1212,48 +1226,56 @@ def or_hidden(sp):
 
 
 def or_hide(sp, model, days=OR_HIDE_DAYS):
-    st = or_state(sp)
-    st.setdefault("hidden", {})[model] = time.time() + days * 86400
-    write_json(sp.root / "or_state.json", st)
+    with STATE_LOCK:
+        st = or_state(sp)
+        st.setdefault("hidden", {})[model] = time.time() + days * 86400
+        write_json(sp.root / "or_state.json", st)
     log(f"[{sp.uid}] openrouter: {model} left out of the list for {days} days (not available to apps like this one)")
 
 
 def or_cool(sp, model, seconds, why):
     """Park one model. No hint from the server -> exponential back-off (65 s, 130 s, ... 1 h) while it keeps failing."""
-    st = or_state(sp)
-    cool = st.setdefault("cool", {})
-    prev = cool.get(model) or {}
-    n = prev.get("n", 0) + 1 if time.time() - prev.get("at", 0) < 3600 else 1
-    secs = seconds if seconds else min(3600, 65 * 2 ** (n - 1))
-    cool[model] = {"until": time.time() + secs, "why": str(why)[:120], "n": n, "at": time.time()}
-    write_json(sp.root / "or_state.json", st)
+    with STATE_LOCK:
+        st = or_state(sp)
+        cool = st.setdefault("cool", {})
+        prev = cool.get(model) or {}
+        n = prev.get("n", 0) + 1 if time.time() - prev.get("at", 0) < 3600 else 1
+        secs = seconds if seconds else min(3600, 65 * 2 ** (n - 1))
+        cool[model] = {"until": time.time() + secs, "why": str(why)[:120], "n": n, "at": time.time()}
+        write_json(sp.root / "or_state.json", st)
     log(f"[{sp.uid}] openrouter: {model} parked for {int(secs)}s ({why})")
 
 
 def or_cool_all(sp, until, why):
-    st = or_state(sp)
-    st["all_until"], st["all_why"] = until, why
-    write_json(sp.root / "or_state.json", st)
+    with STATE_LOCK:
+        st = or_state(sp)
+        st["all_until"], st["all_why"] = until, why
+        write_json(sp.root / "or_state.json", st)
     log(f"[{sp.uid}] openrouter: all free models parked until {_hm(until)} ({why})")
 
 
 def or_note_request(sp):
-    st = or_state(sp)
-    day = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
-    if st.get("day") != day:
-        st["day"], st["used"] = day, 0
-    st["used"] = st.get("used", 0) + 1
-    write_json(sp.root / "or_state.json", st)
+    with STATE_LOCK:
+        st = or_state(sp)
+        day = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
+        if st.get("day") != day:
+            st["day"], st["used"] = day, 0
+        st["used"] = st.get("used", 0) + 1
+        write_json(sp.root / "or_state.json", st)
 
 
 _or_last = {}
 
 
 def or_throttle(sp):
-    gap = OR_FREE_GAP - (time.time() - _or_last.get(sp.uid, 0))
-    if gap > 0:
-        time.sleep(gap)
-    _or_last[sp.uid] = time.time()
+    """Keep OR_FREE_GAP seconds between the requests of one person, also when several threads ask (turbo mode): each
+    asker reserves the next free moment under the lock and waits for it outside."""
+    with STATE_LOCK:
+        now_ = time.time()
+        slot = max(now_, _or_last.get(sp.uid, 0) + OR_FREE_GAP)
+        _or_last[sp.uid] = slot
+    if slot > now_:
+        time.sleep(slot - now_)
 
 
 def or_penalize(sp, model, e):
@@ -2190,6 +2212,9 @@ def page_line(p, upload_no=None, inline=False):
             + (f", upload {upload_no}" if upload_no else ""))
 
 
+MAP_LOCK = threading.RLock()       # one thread makes a book's map, the others wait and find it ready
+
+
 def run_refs_pass(sp, cw, res):
     """Pass 2: a cheap model looks the entries up in the reference textbooks — the book's map first, then only the pages
     it points to — and leaves the exact statements in refs_notes.md for the clean pass. Not fatal: without notes the
@@ -2206,7 +2231,8 @@ def run_refs_pass(sp, cw, res):
     lines = []
     for bdir, m in books:
         try:
-            mp = ensure_ref_map(sp, bdir, m)
+            with MAP_LOCK:
+                mp = ensure_ref_map(sp, bdir, m)
         except (AuthError, TransientError):
             raise
         except Exception as e:
@@ -2377,30 +2403,94 @@ def require_engine_sees(sp, pages):
                                "or PDF pages. Choose a model that supports images and press “Retry”."))
 
 
+TURBO_N = max(2, min(6, int(os.environ.get("SB_TURBO_PARALLEL", 3))))     # chunks at once in turbo mode
+
+
+def run_pool(jobs, fn, nthreads, may_start):
+    """fn(job) for every job on up to `nthreads` threads, each keeping the language of the caller. Thread 0 always takes
+    the next job; the others take one only while may_start() says so (the person's turbo checkbox, read before each job,
+    so it works on the upload that is running now). The first failure stops new jobs from starting; the jobs already
+    running finish their chunk (what they write stays). Then the most important error is raised: cancel, Stop,
+    sign-in, limits, the rest."""
+    todo, lock, stop, errors = list(jobs), threading.Lock(), threading.Event(), []
+
+    def take(k):
+        with lock:
+            if stop.is_set() or not todo:
+                return None, True
+            if k > 0 and not may_start():
+                return None, False
+            return todo.pop(0), False
+
+    def runner(k):
+        while True:
+            job, finished = take(k)
+            if finished:
+                return
+            if job is None:
+                time.sleep(1.5)
+                continue
+            try:
+                fn(job)
+            except BaseException as e:           # Stop and cancel are BaseExceptions: they must cross the thread too
+                errors.append(e)
+                stop.set()
+                return
+    with ThreadPoolExecutor(max_workers=nthreads) as ex:
+        for f in [ex.submit(contextvars.copy_context().run, runner, k) for k in range(nthreads)]:
+            f.result()
+    if errors:
+        raise min(errors, key=lambda e: 0 if isinstance(e, CancelledItem) else 1 if isinstance(e, StoppedError)
+                  else 2 if isinstance(e, AuthError) else 3 if isinstance(e, TransientError) else 4)
+
+
 def transcribe_chunks(sp, subs, work, pages):
-    """Every chunk of CHUNK pages through the model (finished chunks are skipped): -> [(chunk dir, checked result)]."""
+    """Every chunk of CHUNK pages through the model (finished chunks are skipped): -> [(chunk dir, checked result)].
+    Turbo mode (the person's checkbox, OpenRouter only) runs up to TURBO_N unfinished chunks at the same time."""
     chunks = [pages[i:i + CHUNK] for i in range(0, len(pages), CHUNK)]
     originals = {}                  # stored file name -> the name the person's file had
     for s in subs:
         originals.update(zip(s.get("files") or [], s.get("original_names") or s.get("files") or []))
-    results = []
-    for ci, chunk in enumerate(chunks, 1):
-        cw = work / f"c{ci}"
-        if not (cw / ".done").exists():
-            if sp.cancelled():
-                raise CancelledItem()
-            if soft_stop_apply(sp):          # the chunk before this one was the last; the rest waits in the queue
-                raise StoppedError()
-            files = []
-            for p in chunk:
-                name = originals.get(p["source"], p["source"])
-                if name not in files:
-                    files.append(name)
-            set_status(cur_chunk=ci, cur_chunks=len(chunks), cur_pages=f"{chunk[0]['n']}–{chunk[-1]['n']}" if len(chunk) > 1
-                       else str(chunk[0]["n"]), cur_files=files[:6], cur_pass=None, cur_model=None, cur_turn=None)
+    pending = [ci for ci in range(1, len(chunks) + 1) if not (work / f"c{ci}" / ".done").exists()]
+    active, files_of = [], {}       # the chunks being worked on now (threads) and the file names of each
+
+    def one(ci):
+        chunk, cw = chunks[ci - 1], work / f"c{ci}"
+        if sp.cancelled():
+            raise CancelledItem()
+        if soft_stop_apply(sp):          # the chunk before this one was the last; the rest waits in the queue
+            raise StoppedError()
+        files = []
+        for p in chunk:
+            name = originals.get(p["source"], p["source"])
+            if name not in files:
+                files.append(name)
+        pgs = f"{chunk[0]['n']}–{chunk[-1]['n']}" if len(chunk) > 1 else str(chunk[0]["n"])
+        with STATE_LOCK:
+            active.append(ci)
+            files_of[ci] = files
+            now_ = sorted(active)
+            if len(now_) > 1:
+                log(f"[{sp.uid}] turbo: chunk {ci} starts next to {len(now_) - 1} other(s) of {len(chunks)}")
+                set_status(cur_chunk=now_[0], cur_chunks=len(chunks), cur_active=now_, cur_pages=None, cur_pass=None, cur_model=None,
+                           cur_turn=None, cur_files=sorted({f for c in now_ for f in files_of[c]})[:6])
+            else:
+                set_status(cur_chunk=ci, cur_chunks=len(chunks), cur_active=None, cur_pages=pgs, cur_files=files[:6],
+                           cur_pass=None, cur_model=None, cur_turn=None)
+        try:
             process_chunk(sp, subs, work, cw, chunk, ci, len(chunks))
-        results.append((cw, read_json(cw / "result.checked.json")))
-    return results
+        finally:
+            with STATE_LOCK:
+                active.remove(ci)
+                if active:
+                    set_status(cur_active=sorted(active) if len(active) > 1 else None, cur_chunk=min(active))
+
+    if sp.engine() == "openrouter" and len(pending) > 1:
+        run_pool(pending, one, min(TURBO_N, len(pending)), sp.turbo)
+    else:
+        for ci in pending:
+            one(ci)
+    return [(work / f"c{ci}", read_json(work / f"c{ci}" / "result.checked.json")) for ci in range(1, len(chunks) + 1)]
 
 
 def draft_fusions(sp, tgt, results):
@@ -5586,6 +5676,7 @@ def progress_view(sp, st, path, kind):
         pj = read_json(work / "pages.json", {}) or {}
         n = len(pj.get("pages") or [])
         out.update({"chunk": st.get("cur_chunk"), "chunks": st.get("cur_chunks") or (math.ceil(n / CHUNK) if n else None),
+                    "active": st.get("cur_active") or [],
                     "done": sum(1 for _ in work.glob("c*/.done")), "pages": st.get("cur_pages"), "total_pages": n or None,
                     "files": st.get("cur_files") or [], "group": len(st.get("cur_members") or []) > 1})
     return out
@@ -5780,6 +5871,7 @@ def status(sp):
                        "subscription": cs.get("subscription")},
             "worker": worker_view, "blocked": prof.get("blocked"), "build_errors": prof.get("build_errors") or [],
             "paused": bool(prof.get("paused")), "soft_stop": bool(prof.get("soft_stop")), "running_here": busy_here,
+            "turbo": {"on": bool(prof.get("turbo")), "available": sp.engine() == "openrouter", "n": TURBO_N},
             "digest_errors": [{"chapter": k, "error": v.get("error")} for k, v in
                               (read_json(sp.root / "digest_failures.json", {}) or {}).items()
                               if v.get("attempts", 0) >= MAX_ATTEMPTS],
