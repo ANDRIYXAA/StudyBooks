@@ -182,7 +182,7 @@ def anon_status(request: Request) -> dict:
     st = sb.status(sp)
     subjects = []
     for s in st["subjects"]:
-        days = [d | {"entries": [{k: v for k, v in e.items() if k not in ("by", "by_name", "with", "mine")}
+        days = [d | {"entries": [{k: v for k, v in e.items() if k not in ("by", "by_name", "with", "mine", "can_undo", "can_edit")}
                                  for e in d["entries"]]} for d in s["days"]]      # who uploaded what: signed-in people only
         inter = [{k: v for k, v in i.items() if k not in ("by", "mine", "can_undo")} for i in s["interactive"]]
         subjects.append(s | {"making": [], "activity": None, "targets": [], "refs": [], "open_refs": [], "days": days,
@@ -881,9 +881,23 @@ async def api_request(request: Request):
     sp = who(request)
     body = await request.json()
     kind, subject, text = body.get("kind"), body.get("subject", ""), (body.get("text") or "").strip()
-    if kind not in ("explain", "interactive", "ipage_edit") or not subject or not text:
+    if kind not in ("explain", "interactive", "ipage_edit", "entry_edit") or not subject or not text:
         raise HTTPException(400, L("потрібні тип, предмет і текст запиту", "type, subject and request text are required"))
     extra = {}
+    if kind == "entry_edit":                    # a change to one section of the shared clean book
+        tgt = sb.shared_target(sp)
+        topic, entry = str(body.get("topic") or ""), str(body.get("entry") or "")
+        d, meta = sb.entry_dir(tgt, subject, topic, entry)
+        if not d:
+            raise HTTPException(404, L("такого розділу немає, або це PDF без редагування (в ньому немає тексту)",
+                                       "no such section, or it is a PDF as is (it has no text)"))
+        if not sb.can_edit_entry(sp, tgt, meta):
+            raise HTTPException(403, L("цей розділ змінює лише той, хто його додав, і власник книги",
+                                       "only the person who added this section and the book's owner can change it"))
+        if any(x.get("kind") == "entry_edit" and (x.get("subject"), x.get("topic"), x.get("entry")) == (subject, topic, entry)
+               for x in (sb.read_json(p, {}) or {} for p in sp.d["requests"].glob("*.json"))):
+            raise HTTPException(409, L("зміна цього розділу вже чекає в черзі", "a change to this section is already waiting in the queue"))
+        extra = {"topic": topic, "entry": entry}
     if kind == "ipage_edit":                    # a change to one page of the shared book
         tgt = sb.shared_target(sp)
         stem = str(body.get("stem") or "")
@@ -927,6 +941,19 @@ async def api_ipage_undo(request: Request):
     return {"ok": True}
 
 
+@app.post("/api/entry/undo")
+async def api_entry_undo(request: Request):
+    """Bring back the text of a clean-book section from before its last change on request (one step; again = redo)."""
+    sp = who(request)
+    body = await request.json()
+    body = body if isinstance(body, dict) else {}
+    r = sb.undo_entry_edit(sp, str(body.get("subject") or ""), str(body.get("topic") or ""), str(body.get("entry") or ""))
+    if not r["ok"]:
+        raise HTTPException(r["code"], r["error"])
+    kick()
+    return {"ok": True}
+
+
 @app.post("/api/request/{rid}/run")
 def api_request_run(request: Request, rid: str):
     """Make this one waiting page (interactive page or explanation) or upload now, although the person's queue is paused.
@@ -936,7 +963,7 @@ def api_request_run(request: Request, rid: str):
         raise HTTPException(400)
     r = sb.read_json(sp.d["requests"] / f"{rid}.json", None)
     upload = (sp.d["inbox"] / rid / "submission.json").exists()
-    if not upload and (not isinstance(r, dict) or r.get("kind") not in ("interactive", "explain", "ipage_edit")):
+    if not upload and (not isinstance(r, dict) or r.get("kind") not in ("interactive", "explain", "ipage_edit", "entry_edit")):
         raise HTTPException(404, L("такого запиту в черзі немає", "no such request in the queue"))
     if sp.paused():
         sp.update_profile(run_now=sorted(sp.run_now_ids() | {rid}))

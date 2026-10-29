@@ -2886,6 +2886,8 @@ def process_request(sp, rpath):
         return process_exam(sp, rpath)
     if r.get("kind") == "ipage_edit":
         return process_ipage_edit(sp, rpath)
+    if r.get("kind") == "entry_edit":
+        return process_entry_edit(sp, rpath)
     rid, kind, subj = r["id"], r["kind"], r["subject"]
     set_status(current=L("пояснення" if kind == "explain" else "інтерактивна сторінка",
                          "explanation" if kind == "explain" else "interactive page") + f": {r['text'][:60]}",
@@ -3056,6 +3058,138 @@ def process_ipage_edit(sp, rpath):
     shutil.rmtree(work, ignore_errors=True)
     tgt.mark_dirty(subj)
     tgt.git_commit(f"interactive {subj}: {title} ({'copied and changed' if copy else 'changed'} on request)")
+
+
+# ---- a change to one section of the clean book on the person's request (the "Edit" button of an entry)
+
+ENTRY_EDIT_ROUNDS = 2             # model calls per change: the first, then one more if a check failed
+ENTRY_EDIT_MAX_ADDED = 400        # lines a single change may add
+ENTRY_EDIT_MAX_REMOVED = 0.4      # share of the lines a single change may remove
+
+
+def can_edit_entry(sp, tgt, meta):
+    """The book's owner changes any section; everybody else only what they uploaded (the rule for its date)."""
+    return tgt is sp or entry_by(meta or {}, tgt.uid) == sp.uid
+
+
+def entry_dir(tgt, subj, topic, entry):
+    """-> (directory, meta) of one text section of the shared book; None when there is no such section or it is a PDF as is."""
+    if not all(SAFE_ID.match(x or "") for x in (subj, topic, entry)) or ".." in subj + topic + entry:
+        return None, None
+    d = tgt.d["library"] / subj / topic / entry
+    meta = read_json(d / "meta.json")
+    return (d, meta) if meta and not meta.get("asis") and (d / "clean.md").exists() else (None, None)
+
+
+def entry_edit_problem(old, new):
+    """English reason why the new text of a section is not acceptable as a requested change, else None."""
+    if not new.strip():
+        return "`clean.md` is empty or was not written"
+    if new == old:
+        return "nothing was changed"
+    if len(new.encode("utf-8")) > 400_000:
+        return "the section became too large"
+    added, removed, n = line_diff(old, new)
+    blob = "\n".join(added)
+    if len(added) > ENTRY_EDIT_MAX_ADDED or len(blob) > 30_000:
+        return "the change adds too much for one step"
+    if len(removed) > max(5, int(n * ENTRY_EDIT_MAX_REMOVED)):
+        return "too much of the existing text was removed: change only what the request needs"
+    if MD_BAD.search(blob) or URL_RE.search(blob):
+        return "the new text contains a link, HTML or an image: this is not allowed"
+    if set(FIG_RE.findall(blob)) - set(FIG_RE.findall(old)):
+        return "new `{{fig:...}}` markers are not allowed"
+    if set(FIG_RE.findall(old)) - set(FIG_RE.findall(new)):
+        return "an existing `{{fig:...}}` marker was removed: keep every figure"
+    return None
+
+
+def process_entry_edit(sp, rpath):
+    """A change to one section of the clean book on the person's request. The model edits a copy of `clean.md`; code
+    checks it (size, what was removed, links, figures, typesetting) and keeps the old text as `clean.prev.md` (one step back)."""
+    r = read_json(rpath)
+    rid, subj = r["id"], r["subject"]
+    set_status(current=L("правка книги", "book edit") + f": {r['text'][:60]}", current_uid=sp.uid, current_since=now_iso(),
+               current_subject=subj, current_phase="entry_edit", current_rid=rid,
+               **(clear_progress() | {"cur_item": rid, "cur_pass": "entry_edit", "cur_pass_since": now_iso()}))
+    tgt = shared_target(sp)
+    d, meta = entry_dir(tgt, subj, r.get("topic") or "", r.get("entry") or "")
+    if not d:
+        raise PermanentError(L("такого розділу вже немає", "this section is gone"))
+    if not can_edit_entry(sp, tgt, meta):
+        raise PermanentError(L("цей розділ змінює лише той, хто його додав, і власник книги",
+                               "only the person who added this section and the book's owner can change it"))
+    f = d / "clean.md"
+    old = f.read_text(encoding="utf-8")
+    work = sp.d["work"] / rid
+    shutil.rmtree(work, ignore_errors=True)
+    work.mkdir(parents=True)
+    (work / "clean.md").write_text(old, encoding="utf-8")
+    (work / "previous.md").write_text(old, encoding="utf-8")
+    s = find_subject(tgt.load_syllabus(), subj) or {"title": subj, "topics": []}
+    ttitle = next((t["title"] for t in s["topics"] if t["id"] == meta["topic"]), meta["topic"])
+    problem, new, res = None, "", {}
+    try:
+        for rnd in range(ENTRY_EDIT_ROUNDS):
+            note = "" if rnd == 0 else (f"This is attempt {rnd + 1}: your previous version failed the checker. "
+                                        "`clean.md` holds that version; fix it, do not start over.")
+            prompt = render_prompt("entry_edit.md", title=meta["title"], subject=s["title"], topic=ttitle, request=r["text"],
+                                   problems=f"Problem the automatic checker found. Fix it: {problem}" if problem else "",
+                                   round_note=note, refs=" and ".join(map(str, ref_dirs(sp))), refs_list=refs_brief(sp))
+            run_llm(sp, prompt, work, add_dirs=ref_dirs(sp), role="clean")
+            p = work / "clean.md"
+            new = p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""
+            res = read_json(work / "result.json", {}) or {}
+            problem = entry_edit_problem(old, new)
+            if not problem:
+                try:
+                    typesets(tgt, d, new, meta.get("figures"))
+                except ValueError as e:
+                    problem = "the text cannot be typeset into the PDF: " + " ".join(str(e).split())[:300]
+            if not problem:
+                break
+            log(f"[{sp.uid}] {rid}: round {rnd + 1} of the book-edit check failed: {problem[:160]}")
+        else:
+            changes = [str(c)[:200] for c in (res.get("changes") if isinstance(res.get("changes"), list) else [])][:3]
+            why = problem if problem != "nothing was changed" or not changes else changes[0]
+            raise PermanentError(L(f"правку не застосовано: {why[:200]}", f"the edit was not applied: {why[:200]}"))
+        changes = [str(c)[:200] for c in (res.get("changes") if isinstance(res.get("changes"), list) else [])][:12]
+        atomic_write(d / "clean.prev.md", old)
+        atomic_write(f, new)
+        log_ = (meta.get("edits") or [])[-9:] + [{"at": now_iso(), "by": sp.uid, "request": r["text"][:300]}]
+        write_json(d / "meta.json", meta | {"edited": now_iso(), "edit_changes": changes, "edits": log_})
+        r["done_at"] = now_iso()
+        write_json(sp.d["requests"] / "done" / rpath.name, r)
+        rpath.unlink()
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    tgt.mark_dirty(subj)
+    tgt.git_commit(f"book {subj}/{d.name}: changed on request")
+
+
+def undo_entry_edit(sp, subj, topic, entry):
+    """Bring back the text from before the last change on request (one step; asking again is a redo)."""
+    tgt = shared_target(sp)
+    d, meta = entry_dir(tgt, subj, topic, entry)
+    if not d:
+        return {"ok": False, "code": 404, "error": L("такого розділу немає", "no such section")}
+    if not can_edit_entry(sp, tgt, meta):
+        return {"ok": False, "code": 403, "error": L("цей розділ змінює лише той, хто його додав, і власник книги",
+                                                      "only the person who added this section and the book's owner can change it")}
+    prev = d / "clean.prev.md"
+    if not prev.exists():
+        return {"ok": False, "code": 404, "error": L("немає попередньої версії", "there is no earlier version")}
+    old, cur = prev.read_text(encoding="utf-8"), (d / "clean.md").read_text(encoding="utf-8")
+    try:
+        typesets(tgt, d, old, meta.get("figures"))
+    except ValueError:
+        return {"ok": False, "code": 409, "error": L("попередня версія не відтворюється в PDF", "the earlier version does not render in the PDF")}
+    atomic_write(d / "clean.md", old)
+    atomic_write(prev, cur)
+    write_json(d / "meta.json", meta | {"edited": now_iso()})
+    tgt.mark_dirty(subj)
+    tgt.git_commit(f"book {subj}/{d.name}: undo/redo of a change")
+    return {"ok": True}
 
 
 # ---- an uploaded interactive page (HTML, or React source from an AI chat app): the model looks at it, fixes what is
@@ -5377,9 +5511,10 @@ def waiting_work(sp, st, prof, busy_here):
         m = read_json(item_meta_path(kind, path), {}) or {}
         if m.get("kind") == "reference":
             continue
-        if kind == "req" and m.get("kind") in ("interactive", "ipage_edit") and m.get("subject"):     # a page on its way, or a change to one
+        if kind == "req" and m.get("kind") in ("interactive", "ipage_edit", "entry_edit") and m.get("subject"):     # a page on its way, or a change to one
             making.setdefault(m["subject"], []).append({
                 "text": str(m.get("text") or "")[:80], "edit": m.get("kind") == "ipage_edit",
+                "entry_edit": {"topic": m.get("topic"), "entry": m.get("entry")} if m.get("kind") == "entry_edit" else None,
                 "id": m.get("id"), "queued_by_hand": m.get("id") in run_now,
                 "running": bool(busy_here and st.get("current_phase") == m.get("kind") and st.get("current_rid") == m.get("id"))})
         subj = m.get("subject") or (m.get("target") or {}).get("subject")
@@ -5428,6 +5563,9 @@ def class_days(sp, ents, topics):
                                                "added": m["added"], "by": by, "by_name": display_name(by),
                                                "with": [display_name(u) for u in helpers],
                                                "merged": len(m.get("contributors") or []),
+                                               "can_edit": not m.get("asis") and (m["dir"] / "clean.md").exists(),
+                                               "can_undo": (m["dir"] / "clean.prev.md").exists(),
+                                               "edited": m.get("edited"),
                                                "mine": True})       # the library's owner may move every entry
     return days
 

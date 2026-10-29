@@ -749,6 +749,11 @@ const D = [
   ["ipg.edited", "змінено за запитом", "changed on request"],
   ["ipg.editing", "Зміна:", "Change:"],
   ["ipg.ph", "Що змінити на цій сторінці? Наприклад: додай повзунок для маси, зроби графік більшим", "What should change on this page? For example: add a slider for the mass, make the plot bigger"],
+  ["act.entry_edit", "Claude правит розділ книги…", "Claude is editing the book section…"],
+  ["ee.edit", "Edit", "Edit"],
+  ["ee.undo", "Скасувати правку", "Undo edit"],
+  ["ee.undone", "Правку скасовано (або повернено). Книги перезберуться за кілька хвилин.", "The edit was undone (or redone). The books will rebuild in a few minutes."],
+  ["ee.ph", "Що змінити в цьому розділі чистої книги? Наприклад: виправ формулу в прикладі 2, додай пояснення кроку з похідною", "What should change in this section of the clean book? For example: fix the formula in example 2, explain the derivative step"],
   ["act.suggest", "Claude розглядає пропозицію…", "Claude is reviewing the suggestion…"],
   ["act.merge", "Claude аналізує доповнення для основної книги…", "Claude is analysing additions for the main book…"],
   ["act.digest", "Claude пише вижимку розділу…", "Claude is writing the chapter summary…"],
@@ -1703,8 +1708,8 @@ function render() {
         ${b.original ? `<a class="btn" href="${b.original.url}" target="_blank">${esc(t("books.orig", mb(b.original.bytes)))}</a>` : ""}
         ${s.activity ? act(s.activity) : ""}
       </div>
-      ${s.interactive.length || s.making.length ? `<details open data-k="${esc(s.id)}-inter"><summary>${esc(t("books.inter", s.interactive.length))}</summary><ul class="list">${
-        s.making.map(q => `<li><span>${q.edit ? esc(t("ipg.editing")) + " " : ""}${esc(q.text)}</span>${q.running ? act(q.edit ? "ipage_edit" : "interactive") : (S.paused && !q.queued_by_hand
+      ${s.interactive.length || s.making.some(q => !q.entry_edit) ? `<details open data-k="${esc(s.id)}-inter"><summary>${esc(t("books.inter", s.interactive.length))}</summary><ul class="list">${
+        s.making.filter(q => !q.entry_edit).map(q =>`<li><span>${q.edit ? esc(t("ipg.editing")) + " " : ""}${esc(q.text)}</span>${q.running ? act(q.edit ? "ipage_edit" : "interactive") : (S.paused && !q.queued_by_hand
           ? `<span class="muted small">${esc(t("req.paused"))}</span> <button class="btn small primary" type="button" onclick="runNow(this, '${esc(q.id)}')">${esc(t("req.runNow"))}</button>`
           : act("queued"))}</li>`).join("")}${
         s.interactive.map(i => ipageRow(s.id, i)).join("")}</ul></details>` : ""}
@@ -1714,7 +1719,7 @@ function render() {
             e.by_name ? `<br><span class="who">${esc(t("books.by", e.by_name))}${e.with?.length ? " · " + esc(t("books.with", e.with.join(", "))) : ""}${
               S.shared && e.mine ? " · " + esc(t("books.mine")) : ""}</span>` : ""}</span>
             ${S.anon || (S.shared && !e.mine) ? "" : `<input type="date" value="${esc(d.date)}" max="${today()}"
-              onchange="moveEntry('${esc(s.id)}','${esc(e.topic)}','${esc(e.entry)}',this.value)">`}</li>`).join("")}</ul></div>`).join("")}</details>` : ""}
+              onchange="moveEntry('${esc(s.id)}','${esc(e.topic)}','${esc(e.entry)}',this.value)">`}${entryEditUi(s, e)}</li>`).join("")}</ul></div>`).join("")}</details>` : ""}
       ${(s.refs.length + s.open_refs.length) ? `<details data-k="${esc(s.id)}-refs"><summary>${esc(t("books.refs", s.refs.length + s.open_refs.length))}</summary><ul class="list">${
         s.refs.concat(s.open_refs).map(r => `<li>${esc(r.title)}<span class="muted small">${r.pages} ${esc(t("unit.pages"))}${r.has_text ? "" : esc(t("books.noText"))}</span></li>`).join("")}</ul></details>` : ""}
     </div>`;}).join("") : `<div class="empty">${esc(t("books.empty"))}</div>`));
@@ -1844,6 +1849,44 @@ async function ipageSend(b, subj, stem) {
 async function ipageUndo(subj, stem) {
   const r = await fetch("/api/ipage/undo", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({subject: subj, stem})});
   if (!r.ok) { let d; try { d = (await r.json()).detail; } catch (e) { d = r.status; } alert(t("add.error", d)); }
+  refresh();
+}
+
+/* ---------- clean book: the "Edit" button of a section asks for a change to its text ---------- */
+const EEO = {};         // sections with the edit box open -> the text typed so far
+const eeKey = (subj, e) => [subj, e.topic, e.entry].join("/");
+function entryEditUi(s, e) {
+  if (S.anon || !e.can_edit || !e.mine) return "";
+  const k = eeKey(s.id, e), open = k in EEO, q = `'${esc(s.id)}','${esc(e.topic)}','${esc(e.entry)}'`;
+  const job = s.making.find(m => m.entry_edit && m.entry_edit.topic === e.topic && m.entry_edit.entry === e.entry);
+  if (job) return `<span class="ipb">${job.running ? act("entry_edit") : act("queued")}</span>`;
+  return `<span class="ipb"><button class="btn small" type="button" aria-expanded="${open}" onclick="entryEditToggle(${q})">${esc(t("ee.edit"))}</button>${
+      e.can_undo ? `<button class="btn small" type="button" onclick="entryEditUndo(${q})">${esc(t("ee.undo"))}</button>` : ""}</span>${
+    open ? `<div class="ipe"><textarea maxlength="2000" placeholder="${esc(t("ee.ph"))}" oninput="EEO['${esc(k)}'] = this.value">${esc(EEO[k])}</textarea>
+      <div class="row"><button class="btn small primary" type="button" onclick="entryEditSend(this, ${q})">${esc(t("ipg.send"))}</button>
+      <button class="btn small" type="button" onclick="entryEditToggle(${q})">${esc(t("ipg.cancel"))}</button><span class="msg" role="status"></span></div></div>` : ""}`;
+}
+function entryEditToggle(subj, topic, entry) {
+  const k = [subj, topic, entry].join("/");
+  if (k in EEO) delete EEO[k]; else EEO[k] = "";
+  render();
+  document.querySelector(".ipe textarea")?.focus();
+}
+async function entryEditSend(b, subj, topic, entry) {
+  const k = [subj, topic, entry].join("/"), msg = b.closest(".ipe").querySelector(".msg"), text = (EEO[k] || "").trim();
+  if (!text) { msg.textContent = t("req.empty"); msg.className = "msg bad"; return; }
+  b.disabled = true;
+  const r = await fetch("/api/request", {method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({kind: "entry_edit", subject: subj, topic, entry, text})});
+  if (r.ok) { delete EEO[k]; refresh(); return; }
+  let d; try { d = (await r.json()).detail; } catch (err) { d = r.status; }
+  b.disabled = false; msg.textContent = t("add.error", d); msg.className = "msg bad";
+}
+async function entryEditUndo(subject, topic, entry) {
+  const r = await fetch("/api/entry/undo", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({subject, topic, entry})});
+  const msg = $("#dayMsg");
+  if (r.ok) { msg.textContent = t("ee.undone"); msg.className = "msg ok"; }
+  else { let d; try { d = (await r.json()).detail; } catch (err) { d = r.status; } msg.textContent = t("add.error", d); msg.className = "msg bad"; }
   refresh();
 }
 

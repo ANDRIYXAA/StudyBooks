@@ -180,6 +180,25 @@ elif "look after the MAIN study book" in prompt:
         add = "<p>Merged note: |z| = 0 iff z = 0.</p>" if html else "\n\nMerged note: $|z| = 0$ iff $z = 0$.\n"
         (cwd / f"new{f.suffix}").write_text(text.replace("</body>", add + "</body>") if html else text + add, encoding="utf-8")
         (cwd / "result.json").write_text(json.dumps({"verdict": "merge", "match": f.name, "reason": "Підходить: доповнює розділ.", "summary": "Adds a note."}))
+elif "A student asks for a change to one chapter section" in prompt:
+    mode = os.environ.get("FAKE_EEDIT", "ok")
+    md = cwd / "clean.md"
+    text = md.read_text(encoding="utf-8")
+    if mode == "ok":
+        text += "\nRemark added on request: $|z| = 0$ iff $z = 0$.\n"
+    elif mode == "evil":
+        text += "\nSee [this](https://evil.example/x).\n"
+    elif mode == "wipe":
+        text = "Short.\n"
+    elif mode == "badmath":
+        text += "\n$\\frac{1}{$\n"
+    elif mode == "retry" and not (cwd / ".tried").exists():       # first call breaks a rule, the second fixes it
+        (cwd / ".tried").write_text("1")
+        text += "\nSee [this](https://evil.example/x).\n"
+    elif mode == "retry":
+        text = text.replace("\nSee [this](https://evil.example/x).\n", "") + "\nFixed on the second try.\n"
+    md.write_text(text, encoding="utf-8")
+    (cwd / "result.json").write_text(json.dumps({"changes": ["added a remark"] if mode in ("ok", "retry") else []}), encoding="utf-8")
 elif "A student asks for a change to an interactive page" in prompt:
     mode = os.environ.get("FAKE_IEDIT", "ok")
     pg = cwd / "page.html"
