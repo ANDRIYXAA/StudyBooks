@@ -1230,12 +1230,23 @@ def book(request: Request, subject: str, edition: str):
 
 @app.get("/exams/{subject}/{eid}/{which}.pdf")
 def exam_pdf(request: Request, subject: str, eid: str, which: str):
-    sp = viewer(request)
     if which not in ("tickets", "answers") or not re.fullmatch(r"[a-z0-9-]+", subject) or not re.fullmatch(r"[0-9a-z-]+", eid):
         raise HTTPException(404)
-    f = sp.d["exams"] / subject / eid / f"{which}.pdf"
-    if not f.exists():
+    # The status lists a person's exam sets from THEIR OWN space (exams are not part of the shared book), while
+    # viewer() is the main book for everybody. Look in the person's space first, then in the main book (what
+    # visitors without an account are shown).
+    spaces = []
+    try:
+        spaces.append(who(request))
+    except HTTPException:
+        pass
+    v = viewer(request)
+    if all(v.uid != o.uid for o in spaces):
+        spaces.append(v)
+    sp = next((o for o in spaces if (o.d["exams"] / subject / eid / f"{which}.pdf").exists()), None)
+    if sp is None:
         raise HTTPException(404, L("такого набору білетів немає", "no such ticket set"))
+    f = sp.d["exams"] / subject / eid / f"{which}.pdf"
     s = sb.find_subject(sp.load_syllabus(), subject)
     fname = f"{(s or {}).get('title', subject)} ({'tickets' if which == 'tickets' else 'tickets with answers'}).pdf"
     return FileResponse(f, media_type="application/pdf", filename=fname, content_disposition_type="inline",
