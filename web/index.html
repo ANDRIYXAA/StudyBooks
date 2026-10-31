@@ -183,6 +183,7 @@ a.glass > span > i { display: -webkit-box; -webkit-box-orient: vertical; -webkit
 .file { position: relative; border: 1px solid var(--line); border-radius: 0; overflow: hidden; background: var(--bg);
   aspect-ratio: 3/4; display: flex; align-items: center; justify-content: center; font-size: 11px; color: var(--muted);
   text-align: center; padding: 4px; word-break: break-all; }
+.file.ld { display: flex; align-items: center; justify-content: center; min-height: 72px; padding: 6px; text-align: center; border-style: dashed; }
 .file img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .file button { position: absolute; top: 3px; right: 3px; width: 22px; height: 22px; border-radius: 0; border: 0;
   background: #000; color: #fff; cursor: pointer; line-height: 22px; padding: 0; font-size: 14px; }
@@ -673,6 +674,7 @@ const D = [
   ["books.with", x => `доповнили: ${x}`, x => `supplemented by ${x}`],
   ["books.mine", "твоє: можна змінити дату", "yours: you can change the date"],
   ["add.remove", "Прибрати", "Remove"],
+  ["add.uploading", (p, a, b) => `Завантаження на сервер: ${p} % (${a} з ${b})`, (p, a, b) => `Uploading: ${p}% (${a} of ${b})`],
   ["add.count", (n, size) => `${pl(n, "pl.file")}, ${size}`, (n, size) => `${pl(n, "pl.file")}, ${size}`],
 
   ["queue.h", "Черга", "Queue"],
@@ -786,6 +788,13 @@ const D = [
   ["act.exam", "Claude складає білети…", "Claude is making the tickets…"],
   ["act.build", "Книга збирається, зараз файл може бути старим…", "The book is being built; the file may be out of date for now…"],
   ["act.shot", "Обробка зображення…", "Processing the image…"],
+  ["shot.st.read", "Читання з буфера…", "Reading from the clipboard…"],
+  ["shot.st.decode", "Декодування…", "Decoding…"],
+  ["shot.st.pack", "Стиснення…", "Compressing…"],
+  ["shot.l.read", "читання", "reading"],
+  ["shot.l.decode", "декодування", "decoding"],
+  ["shot.l.pack", "стиснення", "compressing"],
+  ["shot.last", "Останнє фото:", "Last picture:"],
   ["act.sending", "Надсилання запиту…", "Sending the request…"],
   ["act.queued", "У черзі на обробку", "Queued for processing"],
 
@@ -1297,9 +1306,35 @@ $("#cam").onchange = e => { addFiles(e.target.files); e.target.value = ""; };
 ["dragenter", "dragover"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("over"); }));
 ["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("over"); }));
 drop.addEventListener("drop", e => addFiles(e.dataTransfer.files));
-document.addEventListener("paste", e => { if (e.clipboardData?.files?.length) addFiles(e.clipboardData.files); });
+document.addEventListener("paste", e => {          // a picture pasted on the Add tab (an Edit box takes its own pictures)
+  if (e.target.closest?.(".ipe") || !drop.offsetParent) return;
+  const files = clipImages(e.clipboardData);
+  if (files.length) { e.preventDefault(); addFiles(files); }
+  else if (e.clipboardData?.files?.length) addFiles(e.clipboardData.files);
+});
 
-function addFiles(list) { for (const f of list) picked.push(f); renderFiles(); }
+/* Files go into `picked` in the order they were given. A big photo is shrunk here, not at "Send" (public site): a chip with a
+   spinner, the seconds and the size stands in its place, and Send waits for it. */
+const adding = [];
+let addChain = Promise.resolve(), addTimer = 0;
+function addFiles(list) {
+  const jobs = [...list].map(f => ({f, t0: performance.now()}));
+  if (!jobs.length) return;
+  adding.push(...jobs);
+  if (!addTimer) addTimer = setInterval(() => { if (adding.length) renderFiles(); else { clearInterval(addTimer); addTimer = 0; } }, 1000);
+  renderFiles();
+  addChain = addChain.then(async () => {
+    for (const j of jobs) {
+      const t0 = performance.now();
+      let out = j.f;
+      try { out = await shrinkImage(j.f); } catch (e) {}
+      if (out !== j.f) await sleep(SHOT_SHOW_MS - (performance.now() - t0));       // a real job: keep the chip long enough to be seen
+      picked.push(out);
+      adding.splice(adding.indexOf(j), 1);
+      renderFiles();
+    }
+  });
+}
 function renderFiles() {
   const box = $("#files"); box.innerHTML = "";
   picked.forEach((f, i) => {
@@ -1311,9 +1346,14 @@ function renderFiles() {
     x.onclick = () => { picked.splice(i, 1); renderFiles(); }; d.appendChild(x);
     box.appendChild(d);
   });
+  adding.forEach(j => {
+    const d = document.createElement("div"); d.className = "file ld"; d.setAttribute("role", "status");
+    d.innerHTML = `<span class="act"><i aria-hidden="true"></i>${esc(t("act.shot"))} ${Math.floor((performance.now() - j.t0) / 1000)} ${esc(t("unit.s"))}${j.f.size ? " · " + esc(mb(j.f.size)) : ""}</span>`;
+    box.appendChild(d);
+  });
   const total = picked.reduce((a, f) => a + f.size, 0);
   $("#count").textContent = picked.length ? t("add.count", picked.length, mb(total)) : "";
-  $("#send").disabled = !picked.length && !($("#pcode")?.value || "").trim();
+  $("#send").disabled = adding.length > 0 || (!picked.length && !($("#pcode")?.value || "").trim());
 }
 
 const uploadKind = () => document.querySelector("input[name=kind]:checked").value;
@@ -1349,7 +1389,7 @@ function fillUpload() {
 
 // A phone photo is 4-8 MB; the server shrinks pages to 1800 px anyway, so send them at 2400 px (Cloudflare caps a request at 100 MB)
 async function shrinkImage(f) {
-  if (!f.type.startsWith("image/") || /\.hei[cf]$/i.test(f.name) || f.size < 700 * 1024) return f;
+  if (!S?.public || f._shrunk || !f.type.startsWith("image/") || /\.hei[cf]$/i.test(f.name) || f.size < 700 * 1024) return f;
   try {
     const bmp = await createImageBitmap(f, {imageOrientation: "from-image"});
     const k = Math.min(1, 2400 / Math.max(bmp.width, bmp.height));
@@ -1358,7 +1398,9 @@ async function shrinkImage(f) {
     cv.getContext("2d").drawImage(bmp, 0, 0, cv.width, cv.height);
     const blob = await new Promise(r => cv.toBlob(r, "image/jpeg", 0.88));
     if (!blob || blob.size >= f.size) return f;
-    return new File([blob], f.name.replace(/\.[^.]+$/, "") + ".jpg", {type: "image/jpeg"});
+    const out = new File([blob], f.name.replace(/\.[^.]+$/, "") + ".jpg", {type: "image/jpeg"});
+    out._shrunk = true;
+    return out;
   } catch (e) { return f; }
 }
 
@@ -1395,7 +1437,11 @@ $("#send").onclick = async () => {
   xhr.open("POST", "/api/upload");
   xhr.setRequestHeader("X-Lang", LANG);
   bar.style.display = "block"; msg.textContent = ""; msg.className = "msg"; $("#send").disabled = true;
-  xhr.upload.onprogress = e => { if (e.lengthComputable) bar.firstElementChild.style.width = (100 * e.loaded / e.total) + "%"; };
+  xhr.upload.onprogress = e => {
+    if (!e.lengthComputable) return;
+    bar.firstElementChild.style.width = (100 * e.loaded / e.total) + "%";
+    msg.className = "msg"; msg.textContent = t("add.uploading", Math.round(100 * e.loaded / e.total), mb(e.loaded), mb(e.total));
+  };
   xhr.onload = () => {
     bar.style.display = "none"; bar.firstElementChild.style.width = 0;
     if (xhr.status === 401) { $("#send").disabled = false; openAuth(); return; }
@@ -1889,8 +1935,8 @@ async function ipageSend(b, subj, stem) {
 /* the request of an Edit box with its pictures: the spinner and the disabled button stay while it goes, even if a refresh redraws the box */
 async function editSend(key, body, done) {
   if (SENDING[key]) return;
-  if (SHOTBUSY[key]) { SHOTMSG[key] = t("act.shot"); render(); return; }       // a picture is still being processed
-  SENDING[key] = true; delete SHOTMSG[key]; render();
+  if (SHOTBUSY[key]) { SHOTMSG[key] = t("act.shot"); shotsPaint(key); return; }       // a picture is still being processed
+  SENDING[key] = true; delete SHOTMSG[key]; shotsPaint(key);
   const t0 = performance.now();
   let r, d;
   try {
@@ -1899,9 +1945,9 @@ async function editSend(key, body, done) {
   } catch (e) { d = String(e.message || e); }
   await sleep(SHOT_SHOW_MS - (performance.now() - t0));
   delete SENDING[key];
-  if (r?.ok) { done(); delete SHOTS[key]; refresh(); return; }
+  if (r?.ok) { done(); delete SHOTS[key]; document.activeElement?.blur?.(); refresh(); return; }       // blur: the redraw skips a box with the cursor in it
   if (r) { try { d = (await r.json()).detail; } catch (e) { d = r.status; } }
-  SHOTMSG[key] = t("add.error", d); render();
+  SHOTMSG[key] = t("add.error", d); shotsPaint(key);
 }
 async function ipageUndo(subj, stem) {
   const r = await fetch("/api/ipage/undo", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({subject: subj, stem})});
@@ -1910,54 +1956,84 @@ async function ipageUndo(subj, stem) {
 }
 
 /* ---------- screenshots on an Edit request: a file picker or Ctrl+V, shrunk in the browser, at most three ---------- */
-const SHOTS = {}, SHOTMSG = {}, SHOTBUSY = {}, SENDING = {};      // key of an open edit box -> [data URL, ...] / a message (a status refresh redraws the boxes)
+const SHOTS = {}, SHOTMSG = {}, SHOTBUSY = {}, SHOTLOG = {}, SENDING = {};      // key of an open edit box -> [data URL, ...] / a message (a status refresh redraws the boxes)
 const SHOTS_MAX = 3, SHOT_SHOW_MS = 800;      // a picture takes ~0.1 s to process: the spinner stays long enough to be seen
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const shotBytes = key => (SHOTS[key] || []).reduce((n, u) => n + u.length * .75, 0);
-function shotsUi(key) {
-  const a = SHOTS[key] || [], k = esc(key), busy = SHOTBUSY[key] || 0;
-  return `<div class="shots">${a.map((u, i) => `<span class="shot"><img src="${u}" alt=""><button type="button" title="${esc(t("shot.remove"))}" aria-label="${esc(t("shot.remove"))}" onclick="shotDrop('${k}', ${i})">×</button></span>`).join("")}${
-    busy ? `<span class="shot ld">${act("shot")}${busy > 1 ? " ×" + busy : ""}</span>` : ""}${
-    a.length + busy < SHOTS_MAX ? `<label class="btn small">${esc(t("shot.add"))}<input type="file" accept="image/*" multiple hidden onchange="shotPick('${k}', this)"></label>` : ""}<span class="muted small">${esc(t("shot.hint"))}</span>${
-    SENDING[key] ? act("sending") + (shotBytes(key) ? ` <span class="muted small">${esc(mb(shotBytes(key)))}</span>` : "") : ""}${
-    SHOTMSG[key] ? `<span class="msg bad" role="status">${esc(SHOTMSG[key])}</span>` : ""}</div>`;
+function shotsUi(key) { return `<div class="shots" data-sk="${esc(key)}">${shotsInner(key)}</div>`; }
+/* The page redraw (setHTML) skips a box while its textarea has the cursor, so a picture pasted there would show up only
+   when the cursor leaves. This block and the send button are therefore updated in place, whatever has the focus. */
+function shotsPaint(key) {
+  document.querySelectorAll(".shots[data-sk]").forEach(el => {
+    if (el.dataset.sk !== key) return;
+    el.innerHTML = shotsInner(key);
+    const btn = el.closest(".ipe")?.querySelector("button.primary");
+    if (btn) btn.disabled = !!SENDING[key];
+  });
 }
-async function shotShrink(file) {         // longest side 1600 px, JPEG of about 500 KB at most
-  const img = new Image(), src = URL.createObjectURL(file);
+function shotsInner(key) {
+  const a = SHOTS[key] || [], k = esc(key), busy = SHOTBUSY[key] || [];
+  return `${a.map((u, i) => `<span class="shot"><img src="${u}" alt=""><button type="button" title="${esc(t("shot.remove"))}" aria-label="${esc(t("shot.remove"))}" onclick="shotDrop('${k}', ${i})">×</button></span>`).join("")}${
+    busy.map(b => `<span class="shot ld" role="status"><span class="act"><i aria-hidden="true"></i>${esc(t("shot.st." + b.stage))} ${Math.floor((performance.now() - b.t0) / 1000)} ${esc(t("unit.s"))}${b.size ? " · " + esc(mb(b.size)) : ""}</span></span>`).join("")}${
+    a.length + busy.length < SHOTS_MAX ? `<label class="btn small">${esc(t("shot.add"))}<input type="file" accept="image/*" multiple hidden onchange="shotPick('${k}', this)"></label>` : ""}<span class="muted small">${esc(t("shot.hint"))}</span>${
+    SHOTLOG[key] ? `<span class="muted small">${esc(SHOTLOG[key])}</span>` : ""}${
+    SENDING[key] ? act("sending") + (shotBytes(key) ? ` <span class="muted small">${esc(mb(shotBytes(key)))}</span>` : "") : ""}${
+    SHOTMSG[key] ? `<span class="msg bad" role="status">${esc(SHOTMSG[key])}</span>` : ""}`;
+}
+function canvasJpeg(c, q) { return new Promise((res, rej) => c.toBlob(b => b ? res(b) : rej(new Error("encode")), "image/jpeg", q)); }
+function blobDataUrl(b) { return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(r.error); r.readAsDataURL(b); }); }
+/* three timed stages: the bytes of the clipboard (the program that put the picture there may hand them over slowly),
+   the decoding, the shrinking (longest side 1600 px, JPEG of about 500 KB at most); `st` is what the spinner shows */
+async function shotShrink(file, st) {
+  const lap = next => { const n = performance.now(); st.laps[st.stage] = n - st.t; st.stage = next; st.t = n; };
+  const buf = await file.arrayBuffer();
+  lap("decode");
+  const img = new Image(), src = URL.createObjectURL(new Blob([buf], {type: file.type}));
   try { img.src = src; await img.decode(); } finally { URL.revokeObjectURL(src); }
   const w0 = img.naturalWidth, h0 = img.naturalHeight;
   if (!w0 || !h0) throw new Error("empty");
-  let k = Math.min(1, 1600 / Math.max(w0, h0)), u = "";
-  for (let tries = 0; tries < 3; tries++, k *= .75) {
+  lap("pack");
+  let k = Math.min(1, 1600 / Math.max(w0, h0)), blob = null;
+  for (let tries = 0; tries < 3 && !(blob && blob.size <= 690000); tries++, k *= .75) {
     const c = document.createElement("canvas");
     c.width = Math.max(1, Math.round(w0 * k)); c.height = Math.max(1, Math.round(h0 * k));
-    const g = c.getContext("2d");
+    const g = c.getContext("2d", {willReadFrequently: true});
     g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height); g.drawImage(img, 0, 0, c.width, c.height);
-    for (let q = .85; q >= .45; q -= .1) { u = c.toDataURL("image/jpeg", q); if (u.length * .75 <= 520000) break; }
-    if (u.length * .75 <= 690000) break;
+    for (let q = .85; q >= .45; q -= .1) { blob = await canvasJpeg(c, q); if (blob.size <= 520000) break; }
   }
-  if (u.length * .75 > 690000) throw new Error("big");
-  return u;
+  if (!blob || blob.size > 690000) throw new Error("big");
+  lap("done");
+  st.out = blob.size;
+  return blobDataUrl(blob);
 }
+let shotTimer = 0;
 async function shotAdd(key, files) {
   const box = (SHOTS[key] ||= []), imgs = files.filter(f => f.type?.startsWith("image/"));
-  delete SHOTMSG[key];
+  delete SHOTMSG[key]; delete SHOTLOG[key];
   if (!imgs.length) return;
-  SHOTBUSY[key] = (SHOTBUSY[key] || 0) + imgs.length;      // a chip with a spinner stands where the picture will be
-  render();
-  for (const f of imgs) {
-    const t0 = performance.now();
+  const sts = imgs.map(f => ({stage: "read", t0: performance.now(), t: performance.now(), size: f.size, laps: {}}));
+  (SHOTBUSY[key] ||= []).push(...sts);                       // a chip with a spinner, the stage and the seconds stands where the picture will be
+  if (!shotTimer) shotTimer = setInterval(() => { const ks = Object.keys(SHOTBUSY); if (ks.length) ks.forEach(shotsPaint); else { clearInterval(shotTimer); shotTimer = 0; } }, 1000);
+  shotsPaint(key);
+  for (const [i, f] of imgs.entries()) {
+    const st = sts[i], t0 = performance.now();
     try {
       if (box.length >= SHOTS_MAX) SHOTMSG[key] = t("shot.max");
-      else box.push(await shotShrink(f));
-    } catch (e) { SHOTMSG[key] = t("shot.bad"); }
+      else {
+        box.push(await shotShrink(f, st));
+        const L = st.laps, sec = n => (n / 1000).toFixed(1) + " " + t("unit.s");
+        SHOTLOG[key] = [t("shot.last"), ["read", "decode", "pack"].map(n => t("shot.l." + n) + " " + sec(L[n] || 0)).join(" · "), mb(st.size) + " → " + mb(st.out)].join(" ");
+        console.log("[shot]", key, L, st.size, "->", st.out);
+      }
+    } catch (e) { SHOTMSG[key] = t("shot.bad"); console.warn("[shot]", e); }
     await sleep(SHOT_SHOW_MS - (performance.now() - t0));
-    if (!--SHOTBUSY[key]) delete SHOTBUSY[key];
-    render();
+    SHOTBUSY[key] = SHOTBUSY[key].filter(x => x !== st);
+    if (!SHOTBUSY[key].length) delete SHOTBUSY[key];
+    shotsPaint(key);
   }
 }
 function shotPick(key, input) { const files = [...input.files]; input.value = ""; shotAdd(key, files); }
-function shotDrop(key, i) { (SHOTS[key] || []).splice(i, 1); delete SHOTMSG[key]; render(); }
+function shotDrop(key, i) { (SHOTS[key] || []).splice(i, 1); delete SHOTMSG[key]; shotsPaint(key); }
 function clipImages(dt) {                 // the pictures of a clipboard or a drop: items first (browsers differ), then files
   const out = [];
   for (const it of dt?.items || []) if (it.kind === "file" && it.type.startsWith("image/")) { const f = it.getAsFile(); if (f) out.push(f); }
@@ -1965,10 +2041,11 @@ function clipImages(dt) {                 // the pictures of a clipboard or a dr
   return out;
 }
 addEventListener("paste", e => {          // Ctrl+V of a screenshot: into the box that has the cursor, else into the open one
+  if (e.defaultPrevented) return;
   const files = clipImages(e.clipboardData);
   if (!files.length) return;
   const tg = e.target, ta = tg.closest?.("textarea[data-shots]")
-    || (/^(INPUT|TEXTAREA|SELECT)$/.test(tg.tagName) ? null : document.querySelector("textarea[data-shots]"));
+    || (/^(INPUT|TEXTAREA|SELECT)$/.test(tg.tagName) ? null : [...document.querySelectorAll("textarea[data-shots]")].find(x => x.offsetParent));
   if (!ta) return;
   e.preventDefault();
   shotAdd(ta.dataset.shots, files);
