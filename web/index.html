@@ -761,7 +761,7 @@ const D = [
   ["ipg.copyNote", "Це чужа сторінка: оригінал лишиться, а твоя зміна з'явиться окремою сторінкою.", "This is someone else's page: the original stays, and your change appears as a separate page."],
   ["ipg.undo", "Скасувати зміну", "Undo change"],
   ["shot.add", "📎 Скріншот", "📎 Screenshot"],
-  ["shot.hint", "Можна вставити з буфера (Ctrl+V): до 3 зображень", "You can paste from the clipboard (Ctrl+V): up to 3 images"],
+  ["shot.hint", "Вставка з буфера (Ctrl+V) або перетягування файлу: до 3 зображень", "Paste from the clipboard (Ctrl+V) or drop a file: up to 3 images"],
   ["shot.remove", "Прибрати скріншот", "Remove the screenshot"],
   ["shot.max", "Не більше 3 скріншотів", "At most 3 screenshots"],
   ["shot.bad", "Не вдалося прочитати зображення", "Could not read the image"],
@@ -1932,9 +1932,24 @@ async function shotAdd(key, files) {
 }
 function shotPick(key, input) { const files = [...input.files]; input.value = ""; shotAdd(key, files); }
 function shotDrop(key, i) { (SHOTS[key] || []).splice(i, 1); delete SHOTMSG[key]; render(); }
-addEventListener("paste", e => {          // a screenshot pasted into an edit box
-  const ta = e.target.closest?.("textarea[data-shots]");
-  const files = [...(e.clipboardData?.files || [])].filter(f => f.type.startsWith("image/"));
+function clipImages(dt) {                 // the pictures of a clipboard or a drop: items first (browsers differ), then files
+  const out = [];
+  for (const it of dt?.items || []) if (it.kind === "file" && it.type.startsWith("image/")) { const f = it.getAsFile(); if (f) out.push(f); }
+  if (!out.length) for (const f of dt?.files || []) if (f.type.startsWith("image/")) out.push(f);
+  return out;
+}
+addEventListener("paste", e => {          // Ctrl+V of a screenshot: into the box that has the cursor, else into the open one
+  const files = clipImages(e.clipboardData);
+  if (!files.length) return;
+  const tg = e.target, ta = tg.closest?.("textarea[data-shots]")
+    || (/^(INPUT|TEXTAREA|SELECT)$/.test(tg.tagName) ? null : document.querySelector("textarea[data-shots]"));
+  if (!ta) return;
+  e.preventDefault();
+  shotAdd(ta.dataset.shots, files);
+});
+addEventListener("dragover", e => { if (e.target.closest?.(".ipe") && [...(e.dataTransfer?.items || [])].some(i => i.kind === "file")) e.preventDefault(); });
+addEventListener("drop", e => {           // a picture file dropped on an edit box
+  const ta = e.target.closest?.(".ipe")?.querySelector("textarea[data-shots]"), files = clipImages(e.dataTransfer);
   if (ta && files.length) { e.preventDefault(); shotAdd(ta.dataset.shots, files); }
 });
 
