@@ -1891,11 +1891,13 @@ async function editSend(key, body, done) {
   if (SENDING[key]) return;
   if (SHOTBUSY[key]) { SHOTMSG[key] = t("act.shot"); render(); return; }       // a picture is still being processed
   SENDING[key] = true; delete SHOTMSG[key]; render();
+  const t0 = performance.now();
   let r, d;
   try {
     r = await fetch("/api/request", {method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({...body, images: SHOTS[key] || []})});
   } catch (e) { d = String(e.message || e); }
+  await sleep(SHOT_SHOW_MS - (performance.now() - t0));
   delete SENDING[key];
   if (r?.ok) { done(); delete SHOTS[key]; refresh(); return; }
   if (r) { try { d = (await r.json()).detail; } catch (e) { d = r.status; } }
@@ -1909,13 +1911,15 @@ async function ipageUndo(subj, stem) {
 
 /* ---------- screenshots on an Edit request: a file picker or Ctrl+V, shrunk in the browser, at most three ---------- */
 const SHOTS = {}, SHOTMSG = {}, SHOTBUSY = {}, SENDING = {};      // key of an open edit box -> [data URL, ...] / a message (a status refresh redraws the boxes)
-const SHOTS_MAX = 3;
+const SHOTS_MAX = 3, SHOT_SHOW_MS = 800;      // a picture takes ~0.1 s to process: the spinner stays long enough to be seen
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const shotBytes = key => (SHOTS[key] || []).reduce((n, u) => n + u.length * .75, 0);
 function shotsUi(key) {
   const a = SHOTS[key] || [], k = esc(key), busy = SHOTBUSY[key] || 0;
   return `<div class="shots">${a.map((u, i) => `<span class="shot"><img src="${u}" alt=""><button type="button" title="${esc(t("shot.remove"))}" aria-label="${esc(t("shot.remove"))}" onclick="shotDrop('${k}', ${i})">×</button></span>`).join("")}${
     busy ? `<span class="shot ld">${act("shot")}${busy > 1 ? " ×" + busy : ""}</span>` : ""}${
     a.length + busy < SHOTS_MAX ? `<label class="btn small">${esc(t("shot.add"))}<input type="file" accept="image/*" multiple hidden onchange="shotPick('${k}', this)"></label>` : ""}<span class="muted small">${esc(t("shot.hint"))}</span>${
-    SENDING[key] ? act("sending") : ""}${
+    SENDING[key] ? act("sending") + (shotBytes(key) ? ` <span class="muted small">${esc(mb(shotBytes(key)))}</span>` : "") : ""}${
     SHOTMSG[key] ? `<span class="msg bad" role="status">${esc(SHOTMSG[key])}</span>` : ""}</div>`;
 }
 async function shotShrink(file) {         // longest side 1600 px, JPEG of about 500 KB at most
@@ -1942,10 +1946,12 @@ async function shotAdd(key, files) {
   SHOTBUSY[key] = (SHOTBUSY[key] || 0) + imgs.length;      // a chip with a spinner stands where the picture will be
   render();
   for (const f of imgs) {
+    const t0 = performance.now();
     try {
       if (box.length >= SHOTS_MAX) SHOTMSG[key] = t("shot.max");
       else box.push(await shotShrink(f));
     } catch (e) { SHOTMSG[key] = t("shot.bad"); }
+    await sleep(SHOT_SHOW_MS - (performance.now() - t0));
     if (!--SHOTBUSY[key]) delete SHOTBUSY[key];
     render();
   }
