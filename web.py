@@ -1267,4 +1267,6 @@ def interactive(request: Request, subject: str, name: str):
         "Content-Security-Policy": "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; "
                                    "style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; "
                                    "form-action 'none'; base-uri 'none'",
+        # A page changes in place on "Edit": without this a browser keeps showing the version it fetched before the change.
+        "Cache-Control": "no-store",
         "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer"})

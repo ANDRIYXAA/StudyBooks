@@ -111,6 +111,15 @@ check("the request is done", (guest.d["requests"] / "done" / rp.name).exists() a
 check("the other page is untouched", (d / "owner-page.html").read_text(encoding="utf-8") == PAGE)
 check("the book is marked dirty", "math1" in (sb.read_json(main.dirty, []) or []))
 
+# a page changed in place must never come from a browser cache
+resp = web.interactive(call("/i/math1/guest-page.html", guest, {}), "math1", "guest-page")
+check("the page is served with no-store", resp.headers.get("cache-control") == "no-store", dict(resp.headers))
+url_before = {i["stem"]: i["url"] for i in sb.interactive_pages(main, "math1")}["guest-page"]
+(d / "guest-page.html").write_text(new + "\n<!-- touched -->", encoding="utf-8")
+url_after = {i["stem"]: i["url"] for i in sb.interactive_pages(main, "math1")}["guest-page"]
+check("the link carries a version that changes with the file", "?v=" in url_before and url_before != url_after, (url_before, url_after))
+(d / "guest-page.html").write_text(new, encoding="utf-8")
+
 # undo and redo
 asyncio.run(web.api_ipage_undo(call("/api/ipage/undo", guest, {"subject": "math1", "stem": "guest-page"})))
 check("undo brings the old version back", (d / "guest-page.html").read_text(encoding="utf-8") == PAGE)

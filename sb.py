@@ -5720,8 +5720,12 @@ def interactive_pages(sp, subject):
     out = []
     for meta in sorted((sp.d["interactive"] / subject).glob("*.json")):
         m = read_json(meta, {})
+        try:        # the link changes with the file, so a page changed on "Edit" is never taken from a cache
+            ver = "?v=" + format(meta.with_suffix(".html").stat().st_mtime_ns // 1000, "x")
+        except OSError:
+            ver = ""
         out.append({"title": m.get("title"), "topic": m.get("topic_title") or m.get("topic"), "stem": meta.stem,
-                    "url": f"/i/{subject}/{meta.stem}.html", "added": m.get("added"), "by": m.get("by"),
+                    "url": f"/i/{subject}/{meta.stem}.html{ver}", "added": m.get("added"), "by": m.get("by"),
                     "edited": m.get("edited"), "can_undo": meta.with_name(meta.stem + ".prev.html").exists()})
     return out
 
