@@ -3014,6 +3014,8 @@ def process_request(sp, rpath):
         if not file_usable(work / out_name):
             raise                           # nothing usable yet: a retry goes on from what is there
         log(f"[{sp.uid}] {rid}: time limit, but {out_name} is complete: taken")
+    if kind != "explain":
+        verify_new_page(sp, work, subj, r["text"])
     res = read_json(work / "result.json", {}) or {}
     topic = slugify(r.get("topic") or res.get("topic") or (ents[0]["topic"] if ents else "general"), 40)
     t = ensure_topic(syl, subj, topic)
@@ -3051,6 +3053,34 @@ def process_request(sp, rpath):
     rpath.unlink()
     shutil.rmtree(work, ignore_errors=True)
     tgt.git_commit(f"{kind} {subj}/{topic}: {title}")
+
+
+def verify_new_page(sp, work, subj, label):
+    """The page the model has just written (`work/page.html`) is checked before it is filed, statically and by running it. A
+    broken one goes back to the model with the list of problems, as an edit does; still broken after IPAGE_ROUNDS calls = the
+    request fails and nothing is filed."""
+    p = work / "page.html"
+    if not p.exists():
+        return                              # the caller reports a missing file
+    keep = read_json(work / "result.json", {}) or {}      # title and topic of the first call: a repair call writes its own
+    for rnd in range(IPAGE_ROUNDS):
+        html = p.read_text(encoding="utf-8", errors="replace")
+        problems = page_check(html) if html.strip() else ["`page.html` was not written"]
+        if not problems:
+            break
+        log(f"[{sp.uid}] new page: round {rnd + 1} of the page check failed: {problems[0][:160]}")
+        if rnd == IPAGE_ROUNDS - 1:
+            raise PermanentError(L(f"сторінка не працює: {problems[0][:200]}", f"the page does not work: {problems[0][:200]}"))
+        (work / "previous.html").write_text(html, encoding="utf-8")
+        prompt = render_prompt("ipage_edit.md", title=str(label)[:80], subject=subj,
+                               request="This page was just made for the student, but it fails the automatic checks. "
+                                       "Fix the problems listed below and change nothing else.",
+                               problems="Problems the automatic checker found. Fix every one:\n" + "\n".join(f"- {x}" for x in problems),
+                               round_note=f"This is attempt {rnd + 2}: `page.html` holds the version that failed the checker; fix it, do not start over.",
+                               shots="")
+        run_llm(sp, prompt, work, role="ipage")
+    if keep:
+        write_json(work / "result.json", keep)
 
 
 TITLE_MAX = 70            # characters of an interactive page's title: what fits on its button in two lines
@@ -3181,7 +3211,7 @@ def process_ipage_edit(sp, rpath):
         p = work / "page.html"
         new = p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""
         res = read_json(work / "result.json", {}) or {}
-        problems = page_problems(new) if new.strip() else ["`page.html` was not written"]
+        problems = page_check(new, old) if new.strip() else ["`page.html` was not written"]
         if new.strip() and len(new) < 0.4 * len(old):
             problems.append("too much of the page was removed: keep what it does")
         if not problems:
@@ -3519,6 +3549,76 @@ def page_problems(html):
     return html_problems(html) + js_problems(html)
 
 
+# The static rules above cannot see a page that crashes when it runs ("Assignment to constant variable" in a function the
+# page calls on load kills everything). So a page is also RUN: in jsdom, inside a locked-down container, where every control
+# is used (sliders to both ends, every option, every button, the mouse on plots, keys). `pagecheck/` holds the checker.
+PAGECHECK_DIR = Path(os.environ.get("SB_PAGECHECK_DIR") or ROOT / "pagecheck")
+PAGECHECK_IMAGE = os.environ.get("SB_PAGECHECK_IMAGE", "node:22-alpine")
+_pagecheck_cache = {}
+
+
+def pagecheck_ready():
+    """The checker is installed (`npm install` in pagecheck/), docker is there and it is not switched off (SB_PAGECHECK=0)."""
+    return os.environ.get("SB_PAGECHECK", "1") != "0" and (PAGECHECK_DIR / "node_modules" / "jsdom").is_dir() and bool(shutil.which("docker"))
+
+
+def page_runtime_problems(html, old=None):
+    """English problems the page shows when it RUNS ([] = it works, or no checker here). Errors the old version already had
+    are not counted against the new one. The page is somebody else's code: it runs with no network, a read-only disk, no
+    capabilities, small memory and time limits, as nobody."""
+    if not pagecheck_ready():
+        return []
+    key = hashlib.sha256((html + "\0" + (old or "")).encode("utf-8")).hexdigest()
+    if key in _pagecheck_cache:
+        return list(_pagecheck_cache[key])
+    name = "sbpc-" + uuid.uuid4().hex[:10]
+    with tempfile.TemporaryDirectory() as td:
+        os.chmod(td, 0o755)
+        files = [("new.html", html)] + ([("old.html", old)] if old else [])
+        for fn, text in files:
+            (Path(td) / fn).write_text(text, encoding="utf-8")
+            os.chmod(Path(td) / fn, 0o644)
+        cmd = ["docker", "run", "--rm", "--name", name, "--network", "none", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=16m",
+               "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pids-limit", "64", "--memory", "400m", "--memory-swap", "400m",
+               "--cpus", "1", "--user", "65534:65534", "-v", f"{PAGECHECK_DIR}:/app:ro", "-v", f"{td}:/in:ro",
+               PAGECHECK_IMAGE, "node", "/app/check.js"] + [f"/in/{fn}" for fn, _ in files]
+        try:
+            r = subprocess.run(cmd, capture_output=True, timeout=120)
+        except subprocess.TimeoutExpired:
+            subprocess.run(["docker", "rm", "-f", name], capture_output=True)
+            log("pagecheck: the container did not finish in 120 s: the page is not blocked")
+            return []
+        except OSError as e:
+            log(f"pagecheck: cannot start docker ({e}): the page is not blocked")
+            return []
+    try:
+        res = json.loads((r.stdout.decode("utf-8", "replace").strip().splitlines() or [""])[-1])
+    except ValueError:
+        log(f"pagecheck: no answer (exit {r.returncode}): {r.stderr.decode('utf-8', 'replace')[:200]}: the page is not blocked")
+        return []
+    norm = lambda m: re.sub(r"\d+", "N", m or "")
+    known = {norm(e.get("message")) for e in ((res.get("old") or {}).get("errors") or [])}
+    out = []
+    for e in (res.get("new") or {}).get("errors") or []:
+        if norm(e.get("message")) in known or "not implemented" in (e.get("message") or "").lower():
+            continue
+        s_ = f"The page fails when it runs in a browser ({e.get('phase', 'when it loaded')}): {e.get('message', '')}"
+        if e.get("in"):
+            s_ += f" [in {e['in']}]"
+        if e.get("line"):
+            s_ += f" at line {e['line']}: `{e.get('source', '')}`"
+        out.append(s_)
+    _pagecheck_cache[key] = out
+    if out:
+        log(f"pagecheck: {len(out)} problem(s), the first: {out[0][:200]}")
+    return list(out)
+
+
+def page_check(html, old=None):
+    """Everything a page must pass before it is filed: the static rules, and (when those pass) a run of the page."""
+    return page_problems(html) or page_runtime_problems(html, old)
+
+
 def page_known(dirpath, *shas):
     """The stamp of a page in this folder that is one of these files (its own or the uploaded original), else None."""
     shas = {x for x in shas if x}
@@ -3587,7 +3687,7 @@ def add_ipages(sp, sdir, sub):
             skipped.append(orig)
             continue
         problems0 = ["this is React/JSX source, not a plain HTML page: rewrite it as one plain HTML+JS file with the same behaviour"] \
-            if jsx else page_problems(source)
+            if jsx else page_check(source)
         work = sp.d["work"] / sub["id"] / f"p{n}"
         shutil.rmtree(work, ignore_errors=True)
         work.mkdir(parents=True)
@@ -3606,7 +3706,7 @@ def add_ipages(sp, sdir, sub):
             new = p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""
             res = read_json(work / "result.json", {}) or {}
             subj = hint or str(res.get("subject") or "")
-            problems = page_problems(new) if new.strip() else ["`page.html` was not written"]
+            problems = page_check(new) if new.strip() else ["`page.html` was not written"]
             if new.strip() and not jsx and len(new) < 0.4 * len(source):
                 problems.append("too much of the page was removed: keep what it does")
             if not find_subject(syl, subj):
@@ -3842,6 +3942,9 @@ def validate_change(typ, old, new):
             scrub = scrub.replace(ns, "")
         if HTML_BAD.search(scrub) or URL_RE.search(scrub):
             return L("у доповненні є мережа, зовнішні ресурси, сховище або навігація — це не дозволено", "the addition uses the network, external resources, storage or navigation, which is not allowed")
+        broken = page_runtime_problems(new, old)
+        if broken:
+            return L("після цієї зміни сторінка не працює: ", "the page does not work after this change: ") + broken[0][:220]
     return None
 
 

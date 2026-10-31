@@ -9,6 +9,7 @@ The current textbook entries of this subject are in `context/<topic>/<entry>.md`
 Write `page.html`: ONE self-contained file that works offline by double-click.
 - No external resources at all: no CDN, no web fonts, no images from the web. Inline CSS and plain JavaScript; draw with SVG or canvas; math as readable Unicode/HTML (no MathJax/KaTeX).
 - `<!DOCTYPE html>`, `<meta charset="utf-8">`, a viewport meta tag; works on a phone (no horizontal scrolling at 360 px width) and on a laptop; supports light and dark mode via `prefers-color-scheme`.
+- A program checks every page by running it: it loads the page, moves every slider to both ends, picks every option, presses every button and uses the mouse and the keys on plots. Any error thrown in the page fails the work. Before you finish, read your code again for a `const` that is assigned again, a name that is not defined, an element that is `null` because its id changed, and a function that is called before it is defined.
 - The point is to explore: sliders/inputs for the parameters, a live diagram or plot that updates immediately, the key numbers shown with units, a short explanation of what the student sees and what to try ("set α to 0 and watch…").
 - The physics/maths must be correct; verify formulas against the references when they cover it. Show the formula used on the page.
 - English text, no emoji.

@@ -1,0 +1,8 @@
+{
+  "name": "studybooks-pagecheck",
+  "private": true,
+  "description": "Runs an interactive page in jsdom and uses its controls (see check.js). Started inside a locked-down container.",
+  "dependencies": {
+    "jsdom": "^26.1.0"
+  }
+}

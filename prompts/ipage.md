@@ -15,6 +15,7 @@ Where the page is served: in a sandbox with no network at all, with only inline 
 - No network calls of any kind (`fetch`, XMLHttpRequest, WebSocket, …). No calls to an AI or other API (for example `window.claude`, `window.storage`). No `localStorage`, `sessionStorage`, cookies or `indexedDB`: keep state in variables. If a feature depends on one of these, replace it with a local equivalent, or remove it and write that in `changes`.
 - No links to other pages, no navigation, no forms, iframes, `window.open`, `eval`, `new Function`, `<meta http-equiv>`. `<meta charset>` and `<meta name="viewport">` are fine.
 - It must fit a 360 px wide phone screen without horizontal scrolling, and work on a laptop. Keep or add light and dark mode via `prefers-color-scheme`.
+- A program checks every page by running it: it loads the page, moves every slider to both ends, picks every option, presses every button and uses the mouse and the keys on plots. Any error thrown in the page fails the work. Before you finish, read your code again for a `const` that is assigned again, a name that is not defined, an element that is `null` because its id changed, and a function that is called before it is defined.
 
 What to do:
 1. Read the whole page. Work out what it teaches and how the student uses it.
