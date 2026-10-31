@@ -254,7 +254,8 @@ async def public_guard(request: Request, call_next):
         if not origin or urllib.parse.urlparse(origin).netloc != host:      # cookies are SameSite=Strict as well
             return JSONResponse({"detail": "bad origin"}, status_code=403)
         cl = request.headers.get("content-length", "")
-        if path != "/api/upload" and cl.isdigit() and int(cl) > 1_000_000:
+        # an Edit request may carry up to three screenshots (data URLs); everything else stays small
+        if path != "/api/upload" and cl.isdigit() and int(cl) > (3_300_000 if path == "/api/request" else 1_000_000):
             return JSONResponse({"detail": "too large"}, status_code=413)
     resp = await call_next(request)
     resp.headers["X-Content-Type-Options"] = "nosniff"
@@ -900,6 +901,14 @@ async def api_request(request: Request):
     if kind not in ("explain", "interactive", "ipage_edit", "entry_edit", "book_edit") or not subject or not text:
         raise HTTPException(400, L("потрібні тип, предмет і текст запиту", "type, subject and request text are required"))
     extra = {}
+    images = body.get("images") or []
+    if images and kind not in ("ipage_edit", "entry_edit", "book_edit"):
+        raise HTTPException(400, L("скріншоти можна додати лише до правки (Edit)", "screenshots can only be added to an edit"))
+    if images:
+        try:
+            sb.require_shots_engine(sp)         # a text-only model on OpenRouter cannot look at them
+        except sb.PermanentError as e:
+            raise HTTPException(400, str(e))
     if kind == "book_edit":                     # a change somewhere in the shared clean book of one subject
         tgt = sb.shared_target(sp)
         if not sb.SAFE_ID.match(subject) or ".." in subject or not sb.book_edit_sections(sp, tgt, subject):
@@ -932,9 +941,16 @@ async def api_request(request: Request):
             raise HTTPException(409, L("зміна цієї сторінки вже чекає в черзі", "a change to this page is already waiting in the queue"))
         extra = {"stem": stem}
     rid = sb.new_id()
+    shots = 0
+    if images:
+        try:
+            shots = sb.save_shots(sp, rid, images)
+        except ValueError as e:
+            sb.drop_shots(sp, rid)
+            raise HTTPException(400, str(e))
     sb.write_json(sp.d["requests"] / f"{rid}.json", {
         "id": rid, "kind": kind, "subject": subject, "topic": body.get("topic") or "", "text": text[:2000],
-        "created": sb.now_iso(), "label": text[:80]} | extra)
+        "created": sb.now_iso(), "label": text[:80]} | ({"shots": shots} if shots else {}) | extra)
     kick()
     return {"ok": True, "id": rid}
 

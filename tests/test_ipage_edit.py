@@ -158,6 +158,52 @@ sb.process_request(guest, rp)
 check("the worker re-checks who may change the page: a copy, not an edit",
       len(list(d.glob("*.json"))) == n0 + 1 and (d / "guest-page.html").read_text(encoding="utf-8") == before_html)
 
+# screenshots on an Edit request
+import base64  # noqa: E402
+JPG = "data:image/jpeg;base64," + base64.b64encode(b"\xff\xd8\xff\xe0" + b"j" * 200).decode()
+PNG = "data:image/png;base64," + base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"p" * 200).decode()
+
+
+def ask_shots(sp, images, kind="ipage_edit"):
+    body = {"kind": kind, "subject": "math1", "stem": "guest-page", "text": "make it look like this", "images": images}
+    try:
+        return asyncio.run(web.api_request(call("/api/request", sp, body))), None
+    except web.HTTPException as e:
+        return None, e.status_code
+
+
+for bad, name in (([JPG] * 4, "four screenshots"), (["data:text/html;base64,PGI+"], "a screenshot that is not an image"),
+                  (["data:image/jpeg;base64," + base64.b64encode(b"not a jpeg at all").decode()], "a screenshot with a wrong signature"),
+                  (["data:image/jpeg;base64,@@@"], "a screenshot that is not base64"),
+                  (["data:image/png;base64," + base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"x" * 800_000).decode()], "a screenshot that is too large")):
+    j, err = ask_shots(guest, bad)
+    check(name + " is refused (400), nothing is queued", err == 400 and not queued(guest) and not list((guest.d["requests"] / "shots").iterdir()), (j, err))
+j, err = ask_shots(guest, [JPG], kind="explain")
+check("screenshots on a request that is not an edit are refused", err == 400, (j, err))
+j, err = ask_shots(guest, [JPG, PNG])
+rid = j["id"] if j else ""
+check("an edit with two screenshots is queued", j and j["ok"] and sb.read_json(guest.d["requests"] / f"{rid}.json")["shots"] == 2, (j, err))
+check("the pictures are kept as files", sorted(f.name for f in sb.shots_dir(guest, rid).iterdir()) == ["shot1.jpg", "shot2.png"])
+tmp = Path(tempfile.mkdtemp())
+note = sb.shots_note(guest, rid, tmp)
+check("the model is told where they are", "screenshots/shot1.jpg" in note and "screenshots/shot2.png" in note and (tmp / "screenshots" / "shot2.png").read_bytes().startswith(b"\x89PNG"), note)
+check("no pictures = no sentence", sb.shots_note(guest, "nothing-here", tmp) == "")
+seen = Path(tempfile.mkdtemp()) / "seen.txt"
+os.environ["FAKE_SEEN"] = str(seen)
+(d / "guest-page.html").write_text(PAGE.replace("let a = 0", "let a = 7"), encoding="utf-8")
+sb.write_json(d / "guest-page.json", {"title": "Vector sum", "topic": "t", "added": sb.now_iso(), "by": "pub-guest"})
+sb.process_request(guest, guest.d["requests"] / f"{rid}.json")
+check("the prompt of the change carries the pictures", "screenshots/shot1.jpg" in seen.read_text(encoding="utf-8"))
+check("the pictures go when the change is done", not sb.shots_dir(guest, rid).exists())
+del os.environ["FAKE_SEEN"]
+j, err = ask_shots(guest, [JPG])
+rid2 = j["id"]
+sb.delete_queue_item(guest, rid2)
+check("deleting the request from the queue deletes its pictures", not sb.shots_dir(guest, rid2).exists() and not (guest.d["requests"] / f"{rid2}.json").exists())
+j, err = ask_shots(guest, [])
+check("an edit without pictures works as before", j and j["ok"] and "shots" not in sb.read_json(guest.d["requests"] / f"{j['id']}.json"), (j, err))
+(guest.d["requests"] / f"{j['id']}.json").unlink()
+
 check("the writing standard is in every model call", "ASD-STE100" in sb.agent_brief("clean") and "ASD-STE100" in sb.agent_brief("ipage"))
 check("... but not in the learning session", sb.agent_brief("learn") == "")
 print("\nFAILED: " + ", ".join(fails) if fails else "\nall ok")

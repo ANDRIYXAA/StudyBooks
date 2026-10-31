@@ -107,6 +107,10 @@ ul.list li.ipg { align-items: center; padding: 12px 0; }
 .bebox { margin-top: 12px; }
 .ipe textarea { min-height: 76px; }
 .ipe .row { margin-top: 8px; }
+.shots { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: 8px; }
+.shot { position: relative; display: inline-block; line-height: 0; }
+.shot img { height: 64px; max-width: 128px; object-fit: cover; border: 1px solid var(--line2); }
+.shot button { position: absolute; top: -7px; right: -7px; width: 20px; height: 20px; padding: 0; font: 700 14px/18px var(--sans); text-align: center; cursor: pointer; border: 1px solid var(--ink); background: var(--bg); color: var(--ink); }
 .gbtn > a:not(.btn) { text-decoration: none; color: var(--bt); }
 /* the button is a pill of reeded glass seen from the side: thin horizontal ribs of uneven width, fine grain, a bright
    side and a dark side, a lit rim, a glare. Each button gets its own --p (rib phase), --r (rib size), --b (where it is
@@ -756,6 +760,11 @@ const D = [
   ["ipg.edit", "Змінити", "Change"],
   ["ipg.copyNote", "Це чужа сторінка: оригінал лишиться, а твоя зміна з'явиться окремою сторінкою.", "This is someone else's page: the original stays, and your change appears as a separate page."],
   ["ipg.undo", "Скасувати зміну", "Undo change"],
+  ["shot.add", "📎 Скріншот", "📎 Screenshot"],
+  ["shot.hint", "Можна вставити з буфера (Ctrl+V): до 3 зображень", "You can paste from the clipboard (Ctrl+V): up to 3 images"],
+  ["shot.remove", "Прибрати скріншот", "Remove the screenshot"],
+  ["shot.max", "Не більше 3 скріншотів", "At most 3 screenshots"],
+  ["shot.bad", "Не вдалося прочитати зображення", "Could not read the image"],
   ["ipg.send", "Надіслати запит", "Send request"],
   ["ipg.cancel", "Закрити", "Close"],
   ["ipg.edited", "змінено за запитом", "changed on request"],
@@ -1856,13 +1865,15 @@ function ipageRow(subj, i) {
   const q = `'${esc(subj)}','${esc(i.stem)}'`;
   return `<li class="ipg"><span class="gbtn" style="${ipVar(i.stem)}"><b class="gring" aria-hidden="true"></b><a class="glass" href="${i.url}" target="_blank"><span><i title="${esc(i.title)}">${esc(i.title)}</i></span></a><button class="gedit" type="button" aria-expanded="${open}" onclick="ipageToggle(${q})"><span>${esc(t("ipg.edit"))}</span></button></span>
     ${can && i.mine && i.can_undo ? `<span class="ipb"><button class="btn small" type="button" onclick="ipageUndo(${q})">${esc(t("ipg.undo"))}</button></span>` : ""}
-    ${can && open ? `<div class="ipe">${i.mine ? "" : `<p class="muted small" style="margin:0 0 6px">${esc(t("ipg.copyNote"))}</p>`}<textarea maxlength="2000" placeholder="${esc(t("ipg.ph"))}" oninput="IPE['${esc(k)}'] = this.value">${esc(IPE[k])}</textarea>
+    ${can && open ? `<div class="ipe">${i.mine ? "" : `<p class="muted small" style="margin:0 0 6px">${esc(t("ipg.copyNote"))}</p>`}<textarea maxlength="2000" data-shots="i:${esc(k)}" placeholder="${esc(t("ipg.ph"))}" oninput="IPE['${esc(k)}'] = this.value">${esc(IPE[k])}</textarea>
+      ${shotsUi("i:" + k)}
       <div class="row"><button class="btn small primary" type="button" onclick="ipageSend(this, ${q})">${esc(t("ipg.send"))}</button>
       <button class="btn small" type="button" onclick="ipageToggle(${q})">${esc(t("ipg.cancel"))}</button><span class="msg" role="status"></span></div></div>` : ""}</li>`;
 }
 function ipageToggle(subj, stem) {
   if (S?.anon) { openAuth(); return; }                  // a reader without an account signs in first
   const k = ipKey(subj, stem);
+  delete SHOTS["i:" + k];
   if (k in IPE) delete IPE[k]; else IPE[k] = "";
   render();
   document.querySelector(".ipe textarea")?.focus();
@@ -1872,8 +1883,8 @@ async function ipageSend(b, subj, stem) {
   if (!text) { msg.textContent = t("req.empty"); msg.className = "msg bad"; return; }
   b.disabled = true;
   const r = await fetch("/api/request", {method: "POST", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({kind: "ipage_edit", subject: subj, stem, text})});
-  if (r.ok) { delete IPE[k]; refresh(); return; }
+    body: JSON.stringify({kind: "ipage_edit", subject: subj, stem, text, images: SHOTS["i:" + k] || []})});
+  if (r.ok) { delete IPE[k]; delete SHOTS["i:" + k]; refresh(); return; }
   let d; try { d = (await r.json()).detail; } catch (e) { d = r.status; }
   b.disabled = false; msg.textContent = t("add.error", d); msg.className = "msg bad";
 }
@@ -1882,6 +1893,50 @@ async function ipageUndo(subj, stem) {
   if (!r.ok) { let d; try { d = (await r.json()).detail; } catch (e) { d = r.status; } alert(t("add.error", d)); }
   refresh();
 }
+
+/* ---------- screenshots on an Edit request: a file picker or Ctrl+V, shrunk in the browser, at most three ---------- */
+const SHOTS = {}, SHOTMSG = {};      // key of an open edit box -> [data URL, ...] / a message (a status refresh redraws the boxes)
+const SHOTS_MAX = 3;
+function shotsUi(key) {
+  const a = SHOTS[key] || [], k = esc(key);
+  return `<div class="shots">${a.map((u, i) => `<span class="shot"><img src="${u}" alt=""><button type="button" title="${esc(t("shot.remove"))}" aria-label="${esc(t("shot.remove"))}" onclick="shotDrop('${k}', ${i})">×</button></span>`).join("")}${
+    a.length < SHOTS_MAX ? `<label class="btn small">${esc(t("shot.add"))}<input type="file" accept="image/*" multiple hidden onchange="shotPick('${k}', this)"></label>` : ""}<span class="muted small">${esc(t("shot.hint"))}</span>${
+    SHOTMSG[key] ? `<span class="msg bad" role="status">${esc(SHOTMSG[key])}</span>` : ""}</div>`;
+}
+async function shotShrink(file) {         // longest side 1600 px, JPEG of about 500 KB at most
+  const img = new Image(), src = URL.createObjectURL(file);
+  try { img.src = src; await img.decode(); } finally { URL.revokeObjectURL(src); }
+  const w0 = img.naturalWidth, h0 = img.naturalHeight;
+  if (!w0 || !h0) throw new Error("empty");
+  let k = Math.min(1, 1600 / Math.max(w0, h0)), u = "";
+  for (let tries = 0; tries < 3; tries++, k *= .75) {
+    const c = document.createElement("canvas");
+    c.width = Math.max(1, Math.round(w0 * k)); c.height = Math.max(1, Math.round(h0 * k));
+    const g = c.getContext("2d");
+    g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height); g.drawImage(img, 0, 0, c.width, c.height);
+    for (let q = .85; q >= .45; q -= .1) { u = c.toDataURL("image/jpeg", q); if (u.length * .75 <= 520000) break; }
+    if (u.length * .75 <= 690000) break;
+  }
+  if (u.length * .75 > 690000) throw new Error("big");
+  return u;
+}
+async function shotAdd(key, files) {
+  const box = (SHOTS[key] ||= []);
+  delete SHOTMSG[key];
+  for (const f of files) {
+    if (!f.type?.startsWith("image/")) continue;
+    if (box.length >= SHOTS_MAX) { SHOTMSG[key] = t("shot.max"); break; }
+    try { box.push(await shotShrink(f)); } catch (e) { SHOTMSG[key] = t("shot.bad"); }
+  }
+  render();
+}
+function shotPick(key, input) { const files = [...input.files]; input.value = ""; shotAdd(key, files); }
+function shotDrop(key, i) { (SHOTS[key] || []).splice(i, 1); delete SHOTMSG[key]; render(); }
+addEventListener("paste", e => {          // a screenshot pasted into an edit box
+  const ta = e.target.closest?.("textarea[data-shots]");
+  const files = [...(e.clipboardData?.files || [])].filter(f => f.type.startsWith("image/"));
+  if (ta && files.length) { e.preventDefault(); shotAdd(ta.dataset.shots, files); }
+});
 
 /* ---------- clean book: the "Edit" button of a section asks for a change to its text ---------- */
 const BEO = {};         // books with the edit box open (subject id -> the text typed so far)
@@ -1892,11 +1947,13 @@ function bookEditBtn(s) {
 }
 function bookEditBox(s) {
   if (!(s.id in BEO) || S.anon || s.making.some(q => q.book_edit)) return "";
-  return `<div class="ipe bebox"><textarea maxlength="2000" placeholder="${esc(t("be.ph"))}" oninput="BEO['${esc(s.id)}'] = this.value">${esc(BEO[s.id])}</textarea>
+  return `<div class="ipe bebox"><textarea maxlength="2000" data-shots="b:${esc(s.id)}" placeholder="${esc(t("be.ph"))}" oninput="BEO['${esc(s.id)}'] = this.value">${esc(BEO[s.id])}</textarea>
+    ${shotsUi("b:" + s.id)}
     <div class="row"><button class="btn small primary" type="button" onclick="bookEditSend(this, '${esc(s.id)}')">${esc(t("ipg.send"))}</button>
     <button class="btn small" type="button" onclick="bookEditToggle('${esc(s.id)}')">${esc(t("ipg.cancel"))}</button><span class="msg" role="status"></span></div></div>`;
 }
 function bookEditToggle(subj) {
+  delete SHOTS["b:" + subj];
   if (subj in BEO) delete BEO[subj]; else BEO[subj] = "";
   render();
   document.querySelector(".bebox textarea")?.focus();
@@ -1906,8 +1963,8 @@ async function bookEditSend(b, subj) {
   if (!text) { msg.textContent = t("req.empty"); msg.className = "msg bad"; return; }
   b.disabled = true;
   const r = await fetch("/api/request", {method: "POST", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({kind: "book_edit", subject: subj, text})});
-  if (r.ok) { delete BEO[subj]; refresh(); return; }
+    body: JSON.stringify({kind: "book_edit", subject: subj, text, images: SHOTS["b:" + subj] || []})});
+  if (r.ok) { delete BEO[subj]; delete SHOTS["b:" + subj]; refresh(); return; }
   let d; try { d = (await r.json()).detail; } catch (err) { d = r.status; }
   b.disabled = false; msg.textContent = t("add.error", d); msg.className = "msg bad";
 }
@@ -1920,12 +1977,14 @@ function entryEditUi(s, e) {
   if (job) return `<span class="ipb">${job.running ? act("entry_edit") : act("queued")}</span>`;
   return `<span class="ipb"><button class="btn small" type="button" aria-expanded="${open}" onclick="entryEditToggle(${q})">${esc(t("ee.edit"))}</button>${
       e.can_undo ? `<button class="btn small" type="button" onclick="entryEditUndo(${q})">${esc(t("ee.undo"))}</button>` : ""}</span>${
-    open ? `<div class="ipe"><textarea maxlength="2000" placeholder="${esc(t("ee.ph"))}" oninput="EEO['${esc(k)}'] = this.value">${esc(EEO[k])}</textarea>
+    open ? `<div class="ipe"><textarea maxlength="2000" data-shots="e:${esc(k)}" placeholder="${esc(t("ee.ph"))}" oninput="EEO['${esc(k)}'] = this.value">${esc(EEO[k])}</textarea>
+      ${shotsUi("e:" + k)}
       <div class="row"><button class="btn small primary" type="button" onclick="entryEditSend(this, ${q})">${esc(t("ipg.send"))}</button>
       <button class="btn small" type="button" onclick="entryEditToggle(${q})">${esc(t("ipg.cancel"))}</button><span class="msg" role="status"></span></div></div>` : ""}`;
 }
 function entryEditToggle(subj, topic, entry) {
   const k = [subj, topic, entry].join("/");
+  delete SHOTS["e:" + k];
   if (k in EEO) delete EEO[k]; else EEO[k] = "";
   render();
   document.querySelector(".ipe textarea")?.focus();
@@ -1935,8 +1994,8 @@ async function entryEditSend(b, subj, topic, entry) {
   if (!text) { msg.textContent = t("req.empty"); msg.className = "msg bad"; return; }
   b.disabled = true;
   const r = await fetch("/api/request", {method: "POST", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({kind: "entry_edit", subject: subj, topic, entry, text})});
-  if (r.ok) { delete EEO[k]; refresh(); return; }
+    body: JSON.stringify({kind: "entry_edit", subject: subj, topic, entry, text, images: SHOTS["e:" + k] || []})});
+  if (r.ok) { delete EEO[k]; delete SHOTS["e:" + k]; refresh(); return; }
   let d; try { d = (await r.json()).detail; } catch (err) { d = r.status; }
   b.disabled = false; msg.textContent = t("add.error", d); msg.className = "msg bad";
 }
