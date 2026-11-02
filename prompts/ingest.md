@@ -59,7 +59,7 @@ Subjects and topics the books are organised by:
    - `pages` are the page numbers listed above that belong to this entry;
    - `new_subject` / `new_topic`: `{"id": "...", "title": "..."}` when you invented one, else null;
    - `same_as`: the id of the shared-book entry this is the same lecture as (see step 3), else null;
-   - `figures` only on pages that have an image; `box` = `[x0, y0, x1, y1]` as fractions of the page width/height, origin at the top-left corner. The box holds the whole drawing with its own labels and nothing else: every edge goes through empty background, never through a word, a line or another picture.
+   - `figures` only on pages that have an image; `box` = `[x0, y0, x1, y1]` as fractions of the page width/height, origin at the top-left corner. The box holds the whole drawing with its own labels and nothing else: every edge goes through empty background, never through a word, a line or another picture. A photo or page where the drawing has explanation text next to it, around it or in it is NOT cropped: its box is `[0, 0, 1, 1]`. Not sure that the box cuts nothing → also `[0, 0, 1, 1]`.
 
 ## Formatting rules for every .md file
 

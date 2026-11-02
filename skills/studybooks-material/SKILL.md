@@ -62,10 +62,12 @@ description: How to add study material (photos of the board, slides, notes, exer
 - Figures: list every drawing that carries meaning; not logos or decoration. The same drawing on several pages is listed ONCE, boxed where most complete. Box = fractions of the page, origin top-left: `[x0, y0, x1, y1]` with x0 < x1, y0 < y1.
 - THE BOX HOLDS THE DRAWING AND ITS OWN LABELS, NOTHING ELSE. Seen wrong: a slide title cut in half across two boxes. Labels cut at the edge (`Breaking strength`, `Uniform plastic e`). Footers, `[Zwick Roell]` tags and slices of the next photo inside the box.
   - In: the whole drawing with its axes, axis names, legend, dimension lines, rotated labels and point letters.
-  - Out: slide title, body text, `Fig.:` caption, footer, page number, logo, source tags, other photos. Text next to a graph (`sup x ln(x) =`) goes in the text, not in the box.
+  - Out, only when the drawing stands apart from its text: slide title, body text, `Fig.:` caption, footer, page number, logo, source tags, other photos. Explanation text next to the drawing → see the two rules below: no crop.
   - The code adds 2 % of the page on each side. Put every edge in empty background, about 3 % away from text or another picture. No such gap → move the edge so that a word or photo is fully in or fully out, never cut.
   - Photos side by side: one box for each photo that matters, or one box around the whole group.
   - Before you write `result.json`: for each box, name what is just inside and just outside each edge. An edge through a letter, a line or a photo → move it.
+  - [owner] DO NOT CROP A PHOTO OR PAGE WHERE THE DRAWING HAS EXPLANATION TEXT NEXT TO IT, AROUND IT OR IN IT. Its box is the whole photo or page: `[0, 0, 1, 1]`. Transcribe the text as usual. Seen wrong: a conductor drawing boxed with half of the text column at its right (`The e`, `charge`, `Unit: .`, `Techni`).
+  - [owner] NOT SURE that the box cuts nothing → keep the photo as it is: `[0, 0, 1, 1]`. A full photo is correct; a cut photo is wrong.
 - `kind`: lecture, exercise (problem sheet / exercise class), tutorial (Tutorium), summary, worksheet, exam, other.
 
 ## refs
