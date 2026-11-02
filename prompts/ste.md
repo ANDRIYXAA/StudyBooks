@@ -1,6 +1,11 @@
 ### Writing standard for English text (ASD-STE100, flavored)
 
-Applies to the English prose you write yourself: explanations, notes, page text, titles, change lists, messages. It never changes the content of the student's material: formulas, symbols, terms, names, quotations, code and file names stay as they are. Do not shorten or reword a lecture to obey these rules. Text in another language is out of scope.
+Applies to all English prose you write: explanations, notes, page text, titles, change lists, messages, and the sentences of the clean English book (passes `clean` and `fuse`, edits of the book).
+
+- In the clean book, write each sentence of the lecture to these rules and keep its meaning. Formulas, symbols, terms, names, code, file names and the layout stay as they are.
+- A heading or a list item that is a short label stays a short label. Do not add words to it.
+- Never drop a fact, a condition or a step to make a sentence shorter. Split the sentence into two.
+- The transcription in the original language (`original`) stays word for word: these rules never change it. Text in another language is out of scope.
 
 - Short, common words: use (not utilize), start (not commence), help (not facilitate), show (not demonstrate), get (not obtain), about (not regarding), before/after (not prior to/subsequent to), also (not furthermore). No marketing words (seamless, robust, powerful).
 - One name for one thing. Do not rotate synonyms for the same object or action.

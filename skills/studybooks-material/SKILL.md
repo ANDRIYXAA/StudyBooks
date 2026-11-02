@@ -54,7 +54,8 @@ description: How to add study material (photos of the board, slides, notes, exer
 
 ## clean
 
-- English textbook prose. German lecture terms: give the German in parentheses at first use ("support reaction (Lagerreaktion)").
+- THE CLEAN TEXT LOOKS LIKE THE LECTURE'S OWN PAGES (the slides or the script PDF). These pages are well laid out, and the transcription keeps their layout. Keep it line for line: only translate and correct. Keep each heading with its number. Keep list items as items: translate the words, do not turn them into sentences. Keep the inline or display form of each formula, the line breaks and the symbols. Only handwritten notes may get a neater layout, with the same content.
+- English. German lecture terms: give the German in parentheses at first use ("support reaction (Lagerreaktion)").
 - Correct silently: signs, indices, missing conditions, wrong formulas, units, arithmetic. Prefer `refs_notes.md` over memory; where it has nothing, change only what you are certain of.
 - Fill real gaps only: a skipped derivation step, the statement of a theorem that is used, a missing unit, the missing answer of a worked example. No long new explanations.
 - Keep the order and the scope of the original. No meta remarks ("the original said", "corrected").

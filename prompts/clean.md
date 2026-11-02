@@ -13,12 +13,13 @@ The page images are in `pages/` (typed text in `text/`). Open a page only where 
 
 For each entry N:
 
-1. Write `e<N>_clean.md`: the same material as a clean textbook section in ENGLISH:
+1. Write `e<N>_clean.md`: the same material in ENGLISH. It looks like the lecture's own pages (slides or script PDF). Keep the layout of the transcription line for line: headings with numbers, list items, formulas and line breaks. Only handwritten notes may get a neater layout. Then:
+   - write the English to the writing standard in your system prompt (ASD-STE100): short sentences, active voice, simple tenses, common words. Keep the meaning, the terms and the layout;
    - translate into English; for German lectures put the German term in parentheses at its first use, e.g. "support reaction (Lagerreaktion)";
    - correct every error silently: wrong signs, indices, missing conditions of theorems, wrong formulas, wrong units, arithmetic slips, wrong terminology;
    - check definitions, theorems, formulas and standard results against `refs_notes.md` and prefer it over your memory. Where it has nothing, rely only on results you are certain of;
    - fill real gaps: a skipped step in a derivation, the statement of a theorem that is used but not written, the missing units of a result, the missing answer of a worked example;
-   - keep the order and scope of the original. Do not add long new explanations or extra theory (explanations are made separately on request). No remarks about what was corrected, no "the original said", no meta commentary — it must read like a textbook;
+   - keep the order and scope of the original. Do not add long new explanations or extra theory (explanations are made separately on request). No remarks about what was corrected, no "the original said", no meta commentary — it must read like the lecture's own pages in clean English;
    - put each listed figure as a placeholder `{{fig:<id>}}` (e.g. `{{fig:f1}}`) on its own line where it belongs. Use only the figure ids listed for that entry.
 2. Write `e<N>_changes.json`: what you changed, for the student's private log: `[{"kind": "fix" | "add", "before": "...", "after": "...", "source": "<book> p.<page>" or "standard result"}]`. Use `[]` when nothing changed.
 
