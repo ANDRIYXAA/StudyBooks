@@ -258,6 +258,11 @@ a:not(.btn):hover { text-decoration-color: var(--ink); }
 .ev:first-child { border-top: 0; }
 .ev .lv { font: 11px var(--mono); margin-right: 6px; }
 .ev .lv.act { color: var(--ok); } .ev .lv.warn { color: var(--warn); } .ev .lv.info { color: var(--muted); }
+.jbar { height: 6px; background: var(--hair); overflow: hidden; margin: 8px 0 4px; }
+.jbar i { display: block; height: 100%; background: var(--ink); }
+.jstep { padding: 8px 0; border-top: 1px solid var(--hair); }
+.jstep .row { gap: 6px; }
+.jfile { font-size: 12px; color: var(--muted); margin-left: 12px; }
 pre.skill { max-height: 360px; overflow: auto; white-space: pre-wrap; font: 12px/1.45 var(--mono); background: var(--bg);
   border: 1px solid var(--line); padding: 8px 10px; margin: 8px 0; }
 .engwrap { display: inline-flex; flex-direction: column; align-items: stretch; gap: 5px; }
@@ -496,6 +501,12 @@ input[type=number] { font: inherit; color: var(--ink); background: var(--bg); bo
 </section>
 
 <section class="tab" id="tab-admin">
+  <div class="card" id="jobCard" hidden>
+    <strong data-i18n="job.h"></strong>
+    <div class="muted small" style="margin-top:4px" data-i18n="job.intro"></div>
+    <div class="msg" id="jobMsg"></div>
+    <div id="jobBody"></div>
+  </div>
   <div class="card" id="svCard" hidden>
     <strong data-i18n="sv.h"></strong>
     <div class="muted small" style="margin-top:4px" data-i18n="sv.intro"></div>
@@ -922,6 +933,51 @@ const D = [
   ["acc.orUnknown", "OpenRouter: невідомо", "OpenRouter: unknown"],
   ["acc.engClaude", "Claude", "Claude"],
 
+  ["job.h", "Довгі прогони", "Long runs"],
+  ["job.intro", "Одноразові великі роботи, наприклад перебудова всіх книг. Їх готує Claude, а виконує код без моделі: кроки йдуть по черзі самі, один крок = один предмет. Перед кроком предмет копіюється, тож крок можна відкотити.",
+    "One-off big jobs, for example a rebuild of all books. Claude prepares them, and the code carries them out without a model: the steps start one after another by themselves, one step = one subject. Before a step starts, the subject is copied, so the step can be undone."],
+  ["job.none", "Прогонів немає.", "There are no runs."],
+  ["job.st.running", "іде", "running"],
+  ["job.st.paused", "пауза", "paused"],
+  ["job.st.done", "готово", "done"],
+  ["job.st.failed", "зупинено через помилку", "stopped by an error"],
+  ["job.st.cancelled", "скасовано", "cancelled"],
+  ["job.ss.waiting", "чекає", "waiting"],
+  ["job.ss.running", "іде", "running"],
+  ["job.ss.done", "готово", "done"],
+  ["job.ss.failed", "не вдався", "failed"],
+  ["job.ss.skipped", "пропущено", "skipped"],
+  ["job.ss.cancelled", "скасовано", "cancelled"],
+  ["job.ss.undone", "відкочено", "undone"],
+  ["job.fs.waiting", "у черзі", "queued"],
+  ["job.fs.busy", "обробляється", "in work"],
+  ["job.fs.done", "готово", "done"],
+  ["job.fs.failed", "не вдався", "failed"],
+  ["job.fs.gone", "видалено", "removed"],
+  ["job.held", "утримано паузою", "held by the pause"],
+  ["job.pages", (d, n) => `${d} з ${n} сторінок`, (d, n) => `${d} of ${n} pages`],
+  ["job.fpages", n => `${n} стор.`, n => `${n} p.`],
+  ["job.left", x => `залишилось ≈ ${x}`, x => `≈ ${x} left`],
+  ["job.hm", (h, m) => h ? `${h} год ${m} хв` : `${m} хв`, (h, m) => h ? `${h} h ${m} min` : `${m} min`],
+  ["job.rate", (r, m) => `темп ${r} стор./хв${m ? "" : " (оцінка)"}`, (r, m) => `${r} pages/min${m ? "" : " (estimate)"}`],
+  ["job.runner", x => `Модель працює в просторі: ${x}`, x => `The model works in the space of: ${x}`],
+  ["job.runnerPaused", "Черга цього простору зупинена: прогін чекає, поки її продовжать.", "The queue of this space is stopped: the run waits until it continues."],
+  ["job.chunk", (c, n) => `порція ${c} з ${n}`, (c, n) => `chunk ${c} of ${n}`],
+  ["job.started", x => `почато ${x}`, x => `started ${x}`],
+  ["job.finished", x => `закінчено ${x}`, x => `ended ${x}`],
+  ["job.log", "Журнал", "Log"],
+  ["job.pause", "Пауза", "Pause"],
+  ["job.resume", "Продовжити", "Continue"],
+  ["job.cancel", "Скасувати", "Cancel"],
+  ["job.skip", "Пропустити", "Skip"],
+  ["job.retry", "Повторити", "Retry"],
+  ["job.undo", "Відкотити", "Undo"],
+  ["job.archive", "Прибрати зі списку", "Remove from the list"],
+  ["job.cAsk", "Скасувати прогін? Файл, що обробляється зараз, дійде до кінця, решта не почнеться. Предмет потім можна відкотити.",
+    "Cancel the run? The file in work now runs to its end, the rest does not start. You can undo the subject later."],
+  ["job.uAsk", "Відкотити цей крок? Предмет у книзі стане таким, яким був до кроку. Теперішні записи предмета лишаться в теці прогону.",
+    "Undo this step? The subject in the book becomes as it was before the step. Its current entries stay in the run's folder."],
+
   ["sv.h", "Супервайзор", "Supervisor"],
   ["sv.intro", "Бот-наглядач на сервері. Кожні 5 хв перевіряє обробник, черги, OpenRouter, диск і сайти. Що може, лагодить сам (завислий обробник, тимчасові збої, застарілі зупинки, ліміт після оплати OpenRouter), решту показує тут. Моделей не викликає, ліміту не витрачає.",
     "A watchdog bot on the server. Every 5 min it checks the worker, the queues, OpenRouter, the disk and the sites. What it can, it fixes by itself (a hung worker, temporary failures, stale stops, the limit after an OpenRouter payment); the rest is shown here. It calls no model and uses no limit."],
@@ -1297,6 +1353,8 @@ document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
   try { localStorage.setItem("tab", b.dataset.tab); } catch (e) {}
 });
 try { const tb = localStorage.getItem("tab"); if (tb) document.querySelector(`nav button[data-tab=${tb}]`)?.click(); } catch (e) {}
+// a link like …/#admin (the admin's desktop shortcut) opens that tab
+{ const h = location.hash.slice(1); if (/^[a-z]+$/.test(h)) document.querySelector(`nav button[data-tab=${h}]`)?.click(); }
 
 /* ---------- picking files ---------- */
 const drop = $("#drop");
@@ -2399,6 +2457,60 @@ async function skRollback(v) {
   loadSkill();
 }
 
+/* ---------- admin: long runs (jobs) that Claude prepared and the code carries out ---------- */
+let JB = null;
+async function loadJobs() {
+  try { JB = await (await fetch("/api/admin/jobs")).json(); renderJobs(); } catch (e) {}
+}
+function jobHM(min) { const m = Math.max(0, Math.round(min)); return t("job.hm", Math.floor(m / 60), m % 60); }
+function renderJobs() {
+  if (!JB) return;
+  $("#jobCard").hidden = false;
+  const open = new Set([...document.querySelectorAll("#jobBody details[open]")].map(d => d.dataset.k));
+  const btn = (id, a, key, step, cls = "") => `<button class="btn small ${cls}" type="button" onclick="jobAct('${esc(id)}','${a}','${esc(step || "")}')">${esc(t(key))}</button>`;
+  setHTML($("#jobBody"), (JB.jobs || []).length ? JB.jobs.map(j => {
+    const st = j.paused && j.state === "running" ? "paused" : j.state, title = (LANG === "en" ? j.title.en : j.title.uk) || j.id;
+    const pct = j.pages ? Math.round(100 * j.pages_done / j.pages) : 0, live = j.state === "running";
+    const steps = j.steps.map(s => {
+      const files = s.uploads.map(u => `<div class="jfile">${esc(u.label)} · ${esc(t("job.fpages", u.pages))} · ${
+        esc(t("job.fs." + u.state))}${u.held ? " · " + esc(t("job.held")) : ""}${u.progress ? " · " + esc(t("job.chunk", u.progress.chunk || u.progress.done + 1, u.progress.chunks)) : ""}</div>`).join("");
+      const can = [];
+      if (s.state === "waiting" && live) can.push(btn(j.id, "skip", "job.skip", s.id));
+      if (s.state === "failed") can.push(btn(j.id, "retry", "job.retry", s.id, "primary"));
+      if (["done", "failed", "cancelled"].includes(s.state) && s.has_backup) can.push(btn(j.id, "undo", "job.undo", s.id));
+      return `<div class="jstep"><div class="row wrap"><strong>${esc(s.subject_title)}</strong><span class="tag ${s.state === "done" ? "ok" : s.state === "failed" ? "bad" : ""}">${
+          esc(t("job.ss." + s.state))}</span><span class="muted small">${esc(t("job.pages", s.pages_done, s.pages))}${s.started ? " · " + esc(t("job.started", fmt(s.started))) : ""}${
+          s.finished ? " · " + esc(t("job.finished", fmt(s.finished))) : ""}</span>${can.join("")}</div>
+        ${s.error ? `<div class="small bad">${esc(s.error)}</div>` : ""}
+        <details data-k="${esc(j.id + s.id)}" ${open.has(j.id + s.id) ? "open" : ""}><summary class="small muted">${esc(s.uploads.length + " × PDF")}</summary>${files}</details></div>`;
+    }).join("");
+    const acts = [];
+    if (live && !j.paused) acts.push(btn(j.id, "pause", "job.pause"));
+    if (live && j.paused) acts.push(btn(j.id, "resume", "job.resume", "", "primary"));
+    if (["running", "failed"].includes(j.state)) acts.push(btn(j.id, "cancel", "job.cancel"));
+    if (!live) acts.push(btn(j.id, "archive", "job.archive"));
+    const logs = (j.log || []).map(l => `<div class="ev"><span class="muted small">${fmt(l.at)} · </span>${esc(LANG === "en" ? l.en : l.uk)}</div>`).join("");
+    return `<div class="card" style="margin-top:10px"><div class="row wrap"><strong>${esc(title)}</strong><span class="tag ${st === "done" ? "ok" : st === "failed" ? "bad" : ""}">${esc(t("job.st." + st))}</span></div>
+      <div class="jbar"><i style="width:${pct}%"></i></div>
+      <div class="small">${esc(t("job.pages", j.pages_done, j.pages))}${live && j.minutes_left ? " · " + esc(t("job.left", jobHM(j.minutes_left))) : ""} · <span class="muted">${esc(t("job.rate", j.rate, j.rate_measured))}</span></div>
+      <div class="small muted">${esc(t("job.runner", j.runner))}</div>
+      ${j.runner_paused && live ? `<div class="small warn">${esc(t("job.runnerPaused"))}</div>` : ""}
+      <div class="row" style="margin-top:8px">${acts.join("")}</div>
+      ${steps}
+      <details data-k="${esc(j.id)}log" ${open.has(j.id + "log") ? "open" : ""}><summary>${esc(t("job.log"))}</summary>${logs}</details></div>`;
+  }).join("") : `<div class="muted small" style="margin-top:8px">${esc(t("job.none"))}</div>`);
+}
+async function jobAct(id, action, step) {
+  if (action === "cancel" && !confirm(t("job.cAsk"))) return;
+  if (action === "undo" && !confirm(t("job.uAsk"))) return;
+  const msg = $("#jobMsg");
+  const r = await fetch(`/api/admin/job/${encodeURIComponent(id)}/${action}`, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({step})});
+  const j = await r.json().catch(() => ({}));
+  if (r.ok) { msg.textContent = j.msg || t("acc.done"); msg.className = "msg ok"; }
+  else { msg.textContent = t("add.error", j.detail || r.status); msg.className = "msg bad"; }
+  loadJobs();
+}
+
 async function loadAdmin() {
   try { M = await (await fetch("/api/admin/merge")).json(); renderAdmin(); } catch (e) {}
 }
@@ -2513,6 +2625,7 @@ async function refresh() {
     if (S.anon && !window._anonTab) { window._anonTab = true; document.querySelector("nav button[data-tab=books]").click(); }
     if (S.is_admin) {
       await loadAdmin(); await loadAccounts();
+      if (!JB || $("#tab-admin").classList.contains("on")) await loadJobs();
       if (!SV || $("#tab-admin").classList.contains("on")) await loadSupervisor();
       if (!SK || ($("#tab-admin").classList.contains("on") && Date.now() - (window._skT || 0) > 30000)) { window._skT = Date.now(); await loadSkill(); }
     }

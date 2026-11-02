@@ -1147,6 +1147,27 @@ async def api_skill_rollback(request: Request):
     return {"ok": True, "v": v}
 
 
+@app.get("/api/admin/jobs")
+def api_jobs(request: Request):
+    """Long runs (jobs) that Claude prepared and the code carries out: their steps, progress and time left."""
+    need_admin(request)
+    return sb.jobs_view()
+
+
+@app.post("/api/admin/job/{jid}/{action}")
+async def api_job_action(request: Request, jid: str, action: str):
+    need_admin(request)
+    if action not in ("pause", "resume", "cancel", "skip", "retry", "undo", "archive"):
+        raise HTTPException(400)
+    step = (await json_body(request)).get("step")
+    try:
+        msg = await run_in_threadpool(sb.job_action, jid, action, str(step) if step else None)
+    except sb.JobError as e:
+        raise HTTPException(e.code, e.msg)
+    kick()
+    return {"ok": True, "msg": msg}
+
+
 @app.post("/api/admin/accounts/{name}/{action}")
 def api_account_action(request: Request, name: str, action: str):
     need_admin(request)

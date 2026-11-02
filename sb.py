@@ -2094,11 +2094,124 @@ def crop_figs(work_pages, figs, outdir):
                        min(W, int((max(x0, x1) + pad) * W)), min(H, int((max(y0, y1) + pad) * H)))
                 if box[2] - box[0] < 20 or box[3] - box[1] < 20:
                     continue
+                if FIG_SNAP:
+                    try:
+                        box = snap_box(im.convert("L"), box)
+                    except Exception as e:          # a snap that fails must never lose the figure
+                        log(f"figure {f.get('id')}: edge snap skipped: {e}")
                 im.crop(box).save(outdir / f"{f['id']}.jpg", "JPEG", quality=86)
             good.append({"id": f["id"], "caption": f.get("caption", ""), "page": int(f["page"])})
         except Exception as e:
             log(f"figure {f} skipped: {e}")
     return good
+
+
+# The model gives the figure box by eye, and its edges often cut a label in half or take a sliver of the slide title
+# with them. snap_box moves each edge to the nearest blank line of the page (a row or column with almost no ink),
+# in or out, whichever is closer: a word mostly inside the box comes in whole, a sliver of a neighbour goes out.
+# An edge with no blank line near it (a photo, a full board) stays where it was.
+FIG_SNAP = os.environ.get("SB_FIG_SNAP", "1") != "0"
+SNAP_REACH = 0.08          # how far an edge may move, as a part of the page size
+SNAP_INK = 40              # grey levels from the background that count as ink
+SNAP_BLANK = 0.004         # a line with at most this part of ink pixels is blank
+
+
+def _page_bg(gray):
+    """The background grey of a page: the most common grey level."""
+    h = gray.histogram()
+    return max(range(256), key=lambda v: h[v])
+
+
+def _ink(gray, box, bg):
+    """Ink pixels inside `box` (left, top, right, bottom) of a grey image."""
+    h = gray.crop(box).histogram()
+    return sum(c for v, c in enumerate(h) if abs(v - bg) > SNAP_INK)
+
+
+SNAP_GAP = 4               # blank lines in a row that make a gap (a single blank line can be the space inside a letter)
+
+
+SNAP_JOIN = 6              # ink pieces along an edge closer than this are one piece
+
+
+def snap_box(gray, box, bg=None):
+    """`box` (pixels: left, top, right, bottom) with each edge moved, see above. Along an edge, the ink that crosses
+    it comes in pieces (a word, a line of the drawing); each piece looks for the nearest gap of SNAP_GAP blank lines
+    over its own span only, so a curve elsewhere on the same column does not block it. If any piece needs the edge
+    to go out, the edge goes out as far as the farthest one needs (content is never cut); if all pieces want it in
+    (slivers of a neighbour), it goes in as far as the deepest one needs. Rows first, then columns over the new rows."""
+    W, H = gray.size
+    bg = _page_bg(gray) if bg is None else bg
+    b = list(box)
+
+    def blank(vertical, i, a, z):
+        """Is line i blank between a and z: a column (vertical) over rows a..z, or a row over columns a..z?"""
+        if not 0 <= i < (W if vertical else H):
+            return True                         # beyond the page edge counts as blank
+        part = (i, a, i + 1, z) if vertical else (a, i, z, i + 1)
+        return _ink(gray, part, bg) <= max(1, SNAP_BLANK * (z - a))
+
+    def gap(vertical, i, step, a, z):
+        return all(blank(vertical, i + step * k, a, z) for k in range(SNAP_GAP))
+
+    def pieces(vertical, line):
+        """The spans (a, z) along `line` where ink crosses it."""
+        a0, z0 = (b[1], b[3]) if vertical else (b[0], b[2])
+        if not 0 <= line < (W if vertical else H):
+            return []
+        strip = gray.crop((line, a0, line + 1, z0) if vertical else (a0, line, z0, line + 1))
+        out, start, last = [], None, None
+        for j, v in enumerate(strip.getdata()):
+            if abs(v - bg) > SNAP_INK:
+                if start is None or j - last > SNAP_JOIN:
+                    if start is not None:
+                        out.append((start, last))
+                    start = j
+                last = j
+        if start is not None:
+            out.append((start, last))
+        return [(max(a0, a0 + s - SNAP_JOIN), min(z0, a0 + e + 1 + SNAP_JOIN)) for s, e in out]
+
+    def move(k):
+        """Edge k (0 left, 1 top, 2 right, 3 bottom) -> its new value."""
+        vertical = k in (0, 2)
+        out = -1 if k in (0, 1) else 1
+        line = b[k] if out < 0 else b[k] - 1          # the outermost line inside the box
+        reach = int(SNAP_REACH * (W if vertical else H))
+        limit_in = (b[2] - b[0] if vertical else b[3] - b[1]) // 4
+        ps = pieces(vertical, line)
+        a0, z0 = (b[1], b[3]) if vertical else (b[0], b[2])
+
+        def ink_on(i, a, z):
+            return _ink(gray, (i, a, i + 1, z) if vertical else (a, i, z, i + 1), bg)
+
+        # going in may cut off only the pieces themselves: stop before the first line with other ink on it
+        for d in range(1, limit_in + 1):
+            i = line - out * d
+            if ink_on(i, a0, z0) - sum(ink_on(i, a, z) for a, z in ps) > max(1, SNAP_BLANK * (z0 - a0)):
+                limit_in = d          # line i itself may stay in as the new edge; past it, it would be cut off
+                break
+        outs, ins = [], []
+        for a, z in ps:
+            for d in range(1, reach + 1):
+                if gap(vertical, line + out * d, out, a, z):
+                    outs.append(d)
+                    break
+                if d <= limit_in and gap(vertical, line - out * d, -out, a, z):
+                    ins.append(d)
+                    break
+        if outs:
+            n = line + out * max(outs)
+        elif ins:
+            n = line - out * max(ins)
+        else:
+            return b[k]
+        return n if out < 0 else n + 1
+
+    b[1], b[3] = move(1), move(3)
+    b[0], b[2] = move(0), move(2)
+    x0, y0, x1, y1 = max(0, b[0]), max(0, b[1]), min(W, b[2]), min(H, b[3])
+    return (x0, y0, x1, y1) if x1 - x0 >= 20 and y1 - y0 >= 20 else tuple(box)
 
 
 def _nonempty(f):
@@ -4904,6 +5017,8 @@ def pending_items(sp):
     for d in sp.d["inbox"].iterdir():
         if d.is_dir() and not d.name.startswith(".") and (d / "submission.json").exists():
             sub = read_json(d / "submission.json", {})
+            if sub.get("hold"):           # an upload of a paused long run (job) waits until the run continues
+                continue
             items.append((sub.get("uploaded_at", ""), "sub", d))
     for f in sp.d["requests"].glob("*.json"):
         r = read_json(f, {})
@@ -5253,6 +5368,10 @@ def kick():
         supervise()          # cheap checks, at most every few minutes (n8n kicks every 5 minutes)
     except Exception as e:
         log(f"supervisor failed: {e}")
+    try:
+        jobs_tick()          # long runs: the next step starts when the last one is done (no model)
+    except Exception as e:
+        log(f"jobs failed: {e}")
     lockf = open(LOCK, "a+")
     try:
         fcntl.flock(lockf, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -6115,6 +6234,424 @@ def retry_failed(sp, name):
     return {"ok": True}
 
 
+# ---------------------------------------------------------------- long runs (jobs)
+#
+# A job is a long, one-off run that Claude prepares (for example: rebuild every book with a new skill) and the code
+# then carries out without a model: its steps start one after another on each kick (n8n, every 5 minutes), each
+# step puts uploads into one person's queue (the "runner", whose engine does the model work), and the admin watches
+# and steers it in the Admin tab: pause, continue, cancel, skip a step, retry a failed one, undo a step (restore the
+# subject from the backup taken before it started). Claude writes the job as a JSON spec and adds it with
+# `sb.py job-add spec.json`; nothing else of it needs a model.
+
+JOBS = DATA / "jobs"
+JOB_LOCK = STATE / "jobs.lock"
+JOB_RATE_DEFAULT = 3.0          # pages a minute, until a finished step of the job measured it
+JOB_LOG_MAX = 200
+JOB_ID_RE = re.compile(r"\d{8}-\d{6}-[0-9a-f]{4}")
+SUBJECT_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,60}")
+DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+class JobError(Exception):
+    def __init__(self, msg, code=400):
+        super().__init__(msg)
+        self.msg, self.code = msg, code
+
+
+def job_path(jid):
+    if not JOB_ID_RE.fullmatch(jid or ""):
+        raise JobError(L("немає такого прогону", "no such run"), 404)
+    return JOBS / jid / "job.json"
+
+
+def job_load(jid):
+    j = read_json(job_path(jid))
+    if not isinstance(j, dict):
+        raise JobError(L("немає такого прогону", "no such run"), 404)
+    return j
+
+
+def job_save(job):
+    write_json(job_path(job["id"]), job)
+
+
+def jobs_all():
+    if not JOBS.exists():
+        return []
+    out = [read_json(p / "job.json") for p in JOBS.iterdir() if p.is_dir() and JOB_ID_RE.fullmatch(p.name)]
+    return sorted((j for j in out if isinstance(j, dict)), key=lambda j: j.get("created", ""), reverse=True)
+
+
+def job_log(job, uk, en):
+    job.setdefault("log", []).append({"at": now_iso(), "uk": uk, "en": en})
+    job["log"] = job["log"][-JOB_LOG_MAX:]
+    log(f"job {job['id']}: {en}")
+
+
+def _src_file(src):
+    """An upload's source file, given relative to the users folder: it must stay inside it."""
+    p = (USERS / str(src or "")).resolve()
+    if USERS.resolve() not in p.parents or not p.is_file():
+        return None
+    return p
+
+
+def _job_files(u):
+    """The files of one upload of a job: `files` (several, e.g. the photos of one lecture) or one `src`."""
+    if not isinstance(u, dict):
+        return []
+    f = u.get("files") if isinstance(u.get("files"), list) else ([u["src"]] if u.get("src") else [])
+    return [str(x) for x in f]
+
+
+def _file_pages(p):
+    if p.suffix.lower() != ".pdf":
+        return 1
+    import pymupdf
+    try:
+        with pymupdf.open(p) as doc:
+            return doc.page_count
+    except Exception:
+        return 1
+
+
+def job_problems(spec):
+    """What is wrong with a job spec (English: the one who writes it is Claude)."""
+    out = []
+    if not isinstance(spec, dict):
+        return ["the spec must be a JSON object"]
+    t = spec.get("title")
+    if not (isinstance(t, dict) and t.get("uk") and t.get("en")):
+        out.append("`title` needs `uk` and `en`")
+    runner = spec.get("runner")
+    if not (isinstance(runner, str) and (USERS / runner / "profile.json").exists()):
+        out.append("`runner` must be an existing space (the person whose engine does the work)")
+    steps = spec.get("steps")
+    if not isinstance(steps, list) or not steps:
+        return out + ["`steps` must be a non-empty list"]
+    for n, s in enumerate(steps, 1):
+        if not isinstance(s, dict) or s.get("kind") != "rebuild_subject":
+            out.append(f"step {n}: `kind` must be `rebuild_subject`")
+            continue
+        if not SUBJECT_RE.fullmatch(str(s.get("subject") or "")):
+            out.append(f"step {n}: `subject` must be a subject id")
+        ups = s.get("uploads")
+        if not isinstance(ups, list) or not ups:
+            out.append(f"step {n}: `uploads` must be a non-empty list")
+            continue
+        for u in ups:
+            files = _job_files(u)
+            if not files or not all(_src_file(f) for f in files):
+                out.append(f"step {n}: upload {u!r}: `files` (or `src`) must name files inside the users folder")
+            elif not DATE_RE.fullmatch(str(u.get("date") or "")):
+                out.append(f"step {n}: upload {u.get('src')}: `date` must be YYYY-MM-DD (the day the class was held)")
+    return out
+
+
+def job_add(spec):
+    """A new job from Claude's spec; it starts at the next kick."""
+    probs = job_problems(spec)
+    if probs:
+        raise JobError("; ".join(probs))
+    jid = now().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:4]
+    steps = []
+    for n, s in enumerate(spec["steps"], 1):
+        ups = []
+        for u in s["uploads"]:
+            files = _job_files(u)
+            ups.append({"files": files, "date": u["date"], "label": str(u.get("label") or Path(files[0]).name)[:200],
+                        "pages": sum(_file_pages(_src_file(f)) for f in files), "qid": None})
+        steps.append({"id": f"s{n}", "kind": "rebuild_subject", "subject": s["subject"], "title": s.get("title"),
+                      "uploads": ups, "pages": sum(u["pages"] for u in ups), "state": "waiting",
+                      "started": None, "finished": None, "backup": None, "error": None})
+    job = {"id": jid, "title": spec["title"], "runner": spec["runner"], "created": now_iso(), "state": "running",
+           "paused": False, "steps": steps, "log": [], "by": "claude"}
+    (JOBS / jid).mkdir(parents=True, exist_ok=True)
+    job_log(job, f"прогін створено: {len(steps)} кроків, {sum(s['pages'] for s in steps)} сторінок",
+            f"run created: {len(steps)} steps, {sum(s['pages'] for s in steps)} pages")
+    job_save(job)
+    return jid
+
+
+def _job_upload_state(runner, qid):
+    if not qid:
+        return "waiting"
+    for d, st in (("processed", "done"), ("failed", "failed"), ("inbox", "waiting")):
+        if (runner.d[d] / qid).exists():
+            return st
+    return "gone"
+
+
+def _job_step_start(job, step):
+    """Back the subject up and take it out of the main book, then queue the step's uploads in the runner's queue."""
+    main, runner = main_space(), Space(job["runner"])
+    if main is None:
+        raise JobError("no main book")
+    subj = step["subject"]
+    lib = main.d["library"] / subj
+    bdir = JOBS / job["id"] / "backup" / step["id"]
+    srcs = [[_src_file(f) for f in _job_files(u)] for u in step["uploads"]]
+    gone = [f for u, fs in zip(step["uploads"], srcs) for f, p in zip(_job_files(u), fs) if p is None]
+    if gone:
+        raise JobError(f"source files are gone: {', '.join(gone[:5])}")
+    if lib.exists():
+        shutil.rmtree(bdir, ignore_errors=True)
+        bdir.mkdir(parents=True)
+        shutil.copytree(lib, bdir / subj, symlinks=True)
+        shutil.rmtree(lib)
+        # entries that need no model ("PDF as is") are not rebuilt: they go straight back
+        kept = 0
+        for m in (bdir / subj).glob("*/*/meta.json"):
+            if (read_json(m, {}) or {}).get("asis"):
+                rel = m.parent.relative_to(bdir / subj)
+                shutil.copytree(m.parent, lib / rel, symlinks=True)
+                kept += 1
+        step["kept"] = kept
+        main.git_commit(f"job {job['id']} {step['id']}: {subj} taken out for a rebuild (backup in jobs/)")
+        step["backup"] = str((bdir / subj).relative_to(DATA))
+    t0 = now()
+    for i, (u, fs) in enumerate(zip(step["uploads"], srcs)):
+        qid = (t0 + dt.timedelta(seconds=i)).strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:4]
+        d = runner.d["inbox"] / qid
+        d.mkdir(parents=True)
+        names = []
+        for k, f in enumerate(fs, 1):
+            name = f"{k:02d}_{f.name}" if len(fs) > 1 else f.name
+            shutil.copy2(f, d / name)
+            names.append(name)
+        write_json(d / "submission.json", {
+            "id": qid, "uploaded_at": (t0 + dt.timedelta(seconds=i)).isoformat(timespec="seconds"), "files": names,
+            "note": "", "subject": subj, "kind": "notes", "label": u["label"], "date": u["date"], "topic": "",
+            "topic_title": "", "original_names": [f.name for f in fs], "skipped_duplicates": [], "attempts": 0,
+            "job": job["id"], "job_step": step["id"]})
+        u["qid"] = qid
+    step.update(state="running", started=now_iso(), error=None)
+    kept = step.get("kept") or 0
+    job_log(job, f"крок {step['id']} ({subj}) почався: {len(step['uploads'])} завантажень, {step['pages']} сторінок у черзі"
+            + (f"; {kept} записів «PDF без редагування» лишились як є" if kept else ""),
+            f"step {step['id']} ({subj}) started: {len(step['uploads'])} uploads, {step['pages']} pages queued"
+            + (f"; {kept} “PDF as is” entries stay as they are" if kept else ""))
+
+
+def _job_step_check(job, step):
+    runner = Space(job["runner"])
+    states = [_job_upload_state(runner, u["qid"]) for u in step["uploads"]]
+    if all(s == "done" for s in states):
+        step.update(state="done", finished=now_iso())
+        job_log(job, f"крок {step['id']} ({step['subject']}) готовий", f"step {step['id']} ({step['subject']}) is done")
+    elif "waiting" not in states:
+        errs = []
+        for u, s in zip(step["uploads"], states):
+            if s == "failed":
+                m = read_json(runner.d["failed"] / u["qid"] / "submission.json", {}) or {}
+                errs.append(f"{u['label']}: {str(m.get('last_error') or '?')[:200]}")
+            elif s == "gone":
+                errs.append(f"{u['label']}: removed from the queue")
+        step.update(state="failed", finished=now_iso(), error="; ".join(errs)[:1000])
+        job["state"] = "failed"
+        job_log(job, f"крок {step['id']} ({step['subject']}) не вдався, прогін зупинено: {step['error']}",
+                f"step {step['id']} ({step['subject']}) failed, the run stopped: {step['error']}")
+
+
+def jobs_tick():
+    """Move every running job on: check its running step, start the next one, finish the job. Cheap, no model;
+    called on every kick and after every admin action."""
+    JOBS.mkdir(parents=True, exist_ok=True)
+    lockf = open(JOB_LOCK, "a+")
+    try:
+        fcntl.flock(lockf, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        lockf.close()
+        return False
+    try:
+        for job in jobs_all():
+            if job.get("state") != "running" or job.get("paused"):
+                continue
+            try:
+                cur = next((s for s in job["steps"] if s["state"] == "running"), None)
+                if cur:
+                    _job_step_check(job, cur)
+                if job["state"] == "running" and not any(s["state"] == "running" for s in job["steps"]):
+                    nxt = next((s for s in job["steps"] if s["state"] == "waiting"), None)
+                    if nxt:
+                        _job_step_start(job, nxt)
+                    else:
+                        job.update(state="done", finished=now_iso())
+                        job_log(job, "прогін завершено", "the run is finished")
+            except Exception as e:
+                job["state"] = "failed"
+                job_log(job, f"помилка коду прогону: {e}", f"error in the run's code: {e}")
+            job_save(job)
+        return True
+    finally:
+        fcntl.flock(lockf, fcntl.LOCK_UN)
+        lockf.close()
+
+
+def _job_hold(job, step, hold):
+    runner = Space(job["runner"])
+    for u in step["uploads"]:
+        f = runner.d["inbox"] / (u["qid"] or "-") / "submission.json"
+        if f.exists():
+            m = read_json(f, {}) or {}
+            m["hold"] = bool(hold)
+            write_json(f, m)
+
+
+def _job_busy_qids(job):
+    st = read_json(STATUS, {}) or {}
+    if st.get("state") != "busy" or st.get("current_uid") != job["runner"]:
+        return set()
+    return set(st.get("cur_members") or []) | {st.get("cur_item")}
+
+
+def job_action(jid, action, step_id=None):
+    """The admin's buttons. Returns a short text for the page."""
+    with open(JOB_LOCK, "a+") as lockf:
+        fcntl.flock(lockf, fcntl.LOCK_EX)
+        try:
+            job = job_load(jid)
+            step = next((s for s in job["steps"] if s["id"] == step_id), None) if step_id else None
+            cur = next((s for s in job["steps"] if s["state"] == "running"), None)
+            runner = Space(job["runner"])
+            if action == "pause":
+                if job["state"] != "running" or job.get("paused"):
+                    raise JobError(L("прогін не йде", "the run is not going"))
+                job["paused"] = True
+                if cur:
+                    _job_hold(job, cur, True)
+                    if _job_busy_qids(job) & {u["qid"] for u in cur["uploads"]}:
+                        runner.update_profile(soft_stop=True)
+                        job["stopped_runner"] = True
+                job_log(job, "пауза: нові файли не беруться, поточний зупиниться після своєї порції",
+                        "paused: no new files start, the current one stops after its chunk")
+            elif action == "resume":
+                if not job.get("paused"):
+                    raise JobError(L("прогін не на паузі", "the run is not paused"))
+                job["paused"] = False
+                if cur:
+                    _job_hold(job, cur, False)
+                if job.pop("stopped_runner", None):
+                    runner.update_profile(soft_stop=None, paused=None, paused_at=None)
+                job_log(job, "продовжено", "continued")
+            elif action == "cancel":
+                if job["state"] not in ("running", "failed"):
+                    raise JobError(L("прогін уже закінчився", "the run has ended"))
+                busy = _job_busy_qids(job)
+                for s in job["steps"]:
+                    for u in s["uploads"]:
+                        d = runner.d["inbox"] / (u["qid"] or "-")
+                        if u["qid"] and d.exists() and u["qid"] not in busy:
+                            shutil.rmtree(d)
+                    if s["state"] == "waiting":
+                        s["state"] = "skipped"
+                    elif s["state"] == "running":
+                        s.update(state="cancelled", finished=now_iso())
+                job.update(state="cancelled", paused=False, finished=now_iso())
+                job_log(job, "скасовано; файл, що обробляється зараз, дійде до кінця. Предмет можна відкотити кнопкою «Відкотити»",
+                        "cancelled; the file being processed now runs to its end. The subject can be restored with “Undo”")
+            elif action == "skip":
+                if not step or step["state"] != "waiting":
+                    raise JobError(L("пропустити можна лише крок, що чекає", "only a waiting step can be skipped"))
+                step["state"] = "skipped"
+                job_log(job, f"крок {step['id']} ({step['subject']}) пропущено", f"step {step['id']} ({step['subject']}) skipped")
+            elif action == "retry":
+                if not step or step["state"] != "failed":
+                    raise JobError(L("повторити можна лише крок, що не вдався", "only a failed step can be retried"))
+                for u in step["uploads"]:
+                    if u["qid"] and (runner.d["failed"] / u["qid"]).exists():
+                        retry_failed(runner, u["qid"])
+                    elif _job_upload_state(runner, u["qid"]) == "gone":
+                        raise JobError(L("файл цього кроку видалено з черги: відкоти крок або пропусти",
+                                         "a file of this step was removed from the queue: undo or skip the step"))
+                step.update(state="running", finished=None, error=None)
+                job.update(state="running", finished=None)
+                job_log(job, f"крок {step['id']} ({step['subject']}) повторюється", f"step {step['id']} ({step['subject']}) is retried")
+            elif action == "undo":
+                if not step or step["state"] not in ("done", "failed", "cancelled"):
+                    raise JobError(L("відкотити можна крок, що закінчився", "only a step that has ended can be undone"))
+                busy = _job_busy_qids(job)
+                if any(_job_upload_state(runner, u["qid"]) == "waiting" for u in step["uploads"]) or \
+                        busy & {u["qid"] for u in step["uploads"]}:
+                    raise JobError(L("файли цього кроку ще в черзі: спершу скасуй прогін", "files of this step are still queued: cancel the run first"))
+                main = main_space()
+                lib = main.d["library"] / step["subject"]
+                if lib.exists():
+                    keep = JOBS / job["id"] / "undone" / f"{step['id']}-{now().strftime('%Y%m%d-%H%M%S')}"
+                    keep.mkdir(parents=True)
+                    shutil.move(str(lib), str(keep / step["subject"]))
+                if step.get("backup"):
+                    shutil.copytree(DATA / step["backup"], lib, symlinks=True)
+                main.git_commit(f"job {job['id']} {step['id']}: {step['subject']} restored from the backup")
+                main.mark_dirty(step["subject"])
+                step.update(state="undone", finished=now_iso())
+                if job["state"] == "running" and not job.get("paused"):
+                    job["paused"] = True
+                    job_log(job, "прогін на паузі після відкату", "the run is paused after the undo")
+                job_log(job, f"крок {step['id']} ({step['subject']}) відкочено: предмет повернуто з копії",
+                        f"step {step['id']} ({step['subject']}) undone: the subject is restored from the backup")
+            elif action == "archive":
+                if job["state"] == "running":
+                    raise JobError(L("спершу скасуй прогін", "cancel the run first"))
+                (JOBS / "_archive").mkdir(parents=True, exist_ok=True)
+                shutil.move(str(JOBS / jid), str(JOBS / "_archive" / jid))
+                return L("прогін прибрано зі списку (копії лишились в архіві)", "the run is removed from the list (the backups stay in the archive)")
+            else:
+                raise JobError(L("невідома дія", "unknown action"))
+            job_save(job)
+        finally:
+            fcntl.flock(lockf, fcntl.LOCK_UN)
+    jobs_tick()
+    return L("готово", "done")
+
+
+def jobs_view():
+    """The Admin tab's view of every job: steps, pages done, the rate measured so far and the time left."""
+    st = read_json(STATUS, {}) or {}
+    main = main_space()
+    titles = {s["id"]: s.get("title") or s["id"] for s in (main.load_syllabus()["subjects"] if main else [])}
+    out = []
+    for job in jobs_all():
+        runner = Space(job["runner"])
+        busy = _job_busy_qids(job)
+        done_pages = 0
+        done_min = 0.0
+        steps = []
+        for s in job["steps"]:
+            ups = []
+            sp_done = 0
+            for u in s["uploads"]:
+                us = _job_upload_state(runner, u["qid"]) if s["state"] != "waiting" else "waiting"
+                prog = None
+                if u["qid"] in busy:
+                    us = "busy"
+                    work = runner.d["work"] / (st.get("cur_item") or u["qid"])
+                    chunks = st.get("cur_chunks") or math.ceil(u["pages"] / CHUNK)
+                    dn = sum(1 for _ in work.glob("c*/.done"))
+                    prog = {"chunk": st.get("cur_chunk"), "chunks": chunks, "done": dn}
+                    sp_done += min(u["pages"], dn * CHUNK)
+                elif us == "done":
+                    sp_done += u["pages"]
+                ups.append({"label": u["label"], "pages": u["pages"], "date": u["date"], "state": us, "progress": prog,
+                            "held": us == "waiting" and bool((read_json(runner.d["inbox"] / (u["qid"] or "-") / "submission.json", {}) or {}).get("hold"))})
+            if s["state"] == "done" and s.get("started") and s.get("finished"):
+                done_pages += s["pages"]
+                done_min += max(1.0, (_epoch(s["finished"]) - _epoch(s["started"])) / 60)
+            steps.append({"id": s["id"], "subject": s["subject"], "subject_title": titles.get(s["subject"], s["subject"]),
+                          "state": s["state"], "pages": s["pages"], "pages_done": s["pages"] if s["state"] == "done" else sp_done,
+                          "started": s.get("started"), "finished": s.get("finished"), "error": s.get("error"),
+                          "has_backup": bool(s.get("backup")), "uploads": ups})
+        rate = done_pages / done_min if done_min else JOB_RATE_DEFAULT
+        left = sum(x["pages"] - x["pages_done"] for x in steps if x["state"] in ("waiting", "running"))
+        out.append({"id": job["id"], "title": job.get("title") or {}, "state": job["state"], "paused": bool(job.get("paused")),
+                    "runner": display_name(job["runner"]), "created": job.get("created"), "finished": job.get("finished"),
+                    "pages": sum(x["pages"] for x in steps), "pages_done": sum(x["pages_done"] for x in steps),
+                    "rate": round(rate, 2), "rate_measured": bool(done_min), "minutes_left": round(left / rate) if left else 0,
+                    "runner_paused": runner.paused() or runner.soft_stopping(), "steps": steps,
+                    "log": list(reversed(job.get("log") or []))[:40]})
+    return {"jobs": out}
+
+
 def main(argv):
     ensure_global()
     cmd = argv[1] if len(argv) > 1 else "kick"
@@ -6133,6 +6670,14 @@ def main(argv):
             r = reindex_refs()
         elif cmd == "supervise":
             r = supervise(force=True)
+        elif cmd == "job-add":          # Claude adds a long run: sb.py job-add spec.json
+            r = {"ok": True, "id": job_add(json.loads(Path(argv[2]).read_text(encoding="utf-8")))}
+        elif cmd == "jobs":
+            r = jobs_view()
+        elif cmd == "job-tick":
+            r = {"ok": jobs_tick()}
+        elif cmd == "job":              # sb.py job <id> <pause|resume|cancel|skip|retry|undo|archive> [step]
+            r = {"ok": True, "msg": job_action(argv[2], argv[3], argv[4] if len(argv) > 4 else None)}
         else:
             r = {"ok": False, "error": L(f"невідома команда {cmd}", f"unknown command {cmd}")}
     except Exception as e:
