@@ -90,6 +90,12 @@ for name, bad in [("no frontmatter", seed.split("---", 2)[2]), ("a link", seed +
                   ("HTML", seed.replace("## refs", "<script>x</script>\n## refs")), ("a lost section", seed.replace("## fuse", "## fusion")),
                   ("too long", seed + "x" * sb.SKILL_MAX), ("most thrown away", seed[:900] + "\n## General\nx\n## transcribe\nx\n## refs\nx\n## clean\nx\n## fuse\nx\n")]:
     check(f"a skill with {name} is refused", sb.skill_problems(bad, seed) != [])
+owned = seed.replace("## refs\n", "## refs\n\n- [owner] Keep each formula as printed.\n", 1)
+check("an owner line is accepted while it stays", sb.skill_problems(owned, owned) == [], sb.skill_problems(owned, owned))
+check("an owner line that learning removes is refused", any("[owner]" in p for p in sb.skill_problems(seed, owned)))
+check("an owner line that learning rewords is refused",
+      any("[owner]" in p for p in sb.skill_problems(owned.replace("as printed", "as you like"), owned)))
+check("the owner rules are explained to the learning call", "[owner]" in (sb.PROMPTS / "learn.md").read_text(encoding="utf-8"))
 
 # --- the budget: 20 % of the 5-hour window, measured from Claude Code's own reports -------------------------------------
 main = web.who(req(OWNER))

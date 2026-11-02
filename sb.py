@@ -5417,6 +5417,7 @@ LEARN_STATE = SKILLS / "learn.json"
 LEARN_LOG_RE = re.compile(r"repairing|raw fallback|still broken|FAILED permanently|attempt \d+ failed|wrote nothing|"
                           r"cut the answer off|fuse into .* (rejected|failed)|reference lookup failed", re.I)
 SKILL_HTML_RE = re.compile(r"<(script|iframe|img|a|style|object|embed|svg|link|meta|form|input)\b", re.I)
+OWNER_MARK = "[owner]"            # a skill line with it is the owner's decision: learning must copy it unchanged
 
 
 def learn_state():
@@ -5464,6 +5465,12 @@ def skill_problems(text, old=None):
         out.append("no HTML tags in the skill")
     if old and len(text) < 0.5 * len(old):
         out.append("most of the existing skill was thrown away; keep what still holds")
+    if old:
+        kept = set(text.splitlines())
+        lost = [l.strip() for l in old.splitlines() if OWNER_MARK in l and l not in kept]
+        if lost:
+            out.append(f"lines marked {OWNER_MARK} are decisions of the book owner: copy them unchanged; changed or "
+                       "missing: " + "; ".join(x[:80] for x in lost[:3]))
     return out
 
 
