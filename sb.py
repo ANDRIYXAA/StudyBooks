@@ -1684,7 +1684,7 @@ def run_llm(sp, prompt, cwd, add_dirs=(), timeout=2400, need_vision=False, role=
 SKILL_SECTIONS = ("General", "transcribe", "refs", "clean", "fuse")
 SKILL_MAX = 24000                  # characters of the whole file
 SKILL_SECTION_MAX = {"General": 3000}
-SKILL_SECTION_DEFAULT_MAX = 6000
+SKILL_SECTION_DEFAULT_MAX = 8000
 PAGE_GENERAL_MAX = 9000           # the page skill carries the whole house style in its General part
 _skill_cache = [None, None]        # (mtime, text)
 

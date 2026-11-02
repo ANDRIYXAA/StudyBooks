@@ -28,13 +28,20 @@ description: How to add study material (photos of the board, slides, notes, exer
 - Read EVERY listed page fully, top to bottom, left column before right column; on a board photo, follow the lecturer's order (boxes and arrows), not strict left-to-right.
 - Transcribe, do not improve: keep wording, order, notation, abbreviations and even mistakes. Unreadable → `[unreadable]`; crossed-out text is left out.
 - Indices and exponents are where most errors happen: check every `_` and `^` against the image (`x_i^2` vs `x^{i2}`), and primes, dots and bars (`\dot x`, `\bar z`, `x'`).
+- Brackets: the same kind at the same place as printed (`(a+bi)`, `[0, 1)`, `\{ \}`, `|x|`), also the ones that look unnecessary. Round matrix = `pmatrix`, square = `bmatrix`.
 - Vectors: keep the author's notation (arrow → `\vec{F}`, underline → `\underline{F}`, bold → `\mathbf{F}`).
 - Matrices and systems: `\begin{pmatrix} ... \end{pmatrix}` / `\begin{cases}`, row by row as written.
 - Slides with a text layer: trust the text layer for words, but rebuild formulas from the image (text layers garble math).
 - Units and numbers exactly as written (`5 kN`, `2,5` stays `2,5` in a German original).
 - One upload is usually ONE entry. Split only when pages clearly belong to another subject or topic.
 - `same_as`: set it only when the listed entry is the same class (same lecture number, or obviously the same slides/derivations). A different lecture of the same course, or its exercise class, is NOT the same.
-- Figures: list every drawing that carries meaning (free-body diagram, graph, circuit, sketch, table photo). The box is fractions of the page, origin top-left: `[x0, y0, x1, y1]` with x0 < x1, y0 < y1; leave a margin around the drawing rather than cutting it off.
+- Figures: list every drawing that carries meaning (free-body diagram, graph, circuit, sketch, table photo). The box is fractions of the page, origin top-left: `[x0, y0, x1, y1]` with x0 < x1, y0 < y1.
+- THE BOX HOLDS THE DRAWING AND ITS OWN LABELS, NOTHING ELSE.
+  - In: the whole drawing with its axes, axis names, legend, dimension lines, rotated labels and point letters.
+  - Out: slide title, body text, `Fig.:` caption, footer, page number, logo, source tags, other photos. Text next to a graph goes in the text, not in the box.
+  - The code adds 2 % of the page on each side. Put every edge in empty background, about 3 % away from text or another picture. No such gap → move the edge so that a word or photo is fully in or fully out, never cut.
+  - Photos side by side: one box for each photo that matters, or one box around the whole group.
+  - Before you write `result.json`: for each box, name what is just inside and just outside each edge. An edge through a letter, a line or a photo → move it.
 - `kind`: lecture (the lecture itself), exercise (problem sheet / exercise class), tutorial (Tutorium), summary, worksheet, exam, other.
 - `result.json` is written LAST and must be valid JSON: double quotes, no trailing commas, no comments.
 
@@ -51,6 +58,9 @@ description: How to add study material (photos of the board, slides, notes, exer
 - Correct silently: signs, indices, missing conditions, wrong formulas, units, arithmetic. Prefer `refs_notes.md` over memory; where it has nothing, change only what you are certain of.
 - Fill real gaps only: a skipped derivation step, the statement of a theorem that is used, a missing unit, the missing answer of a worked example. No long new explanations.
 - Keep the order and the scope of the original. No meta remarks ("the original said", "corrected").
+- COPY FORMULAS, DO NOT RESTYLE THEM. Copy each formula of the transcription character for character. Change one only for a certain error, and log that change in `e<N>_changes.json`. Keep brackets (also unnecessary ones), exponents, indices, arrows, `\cdot`, the order of factors, `\dots` and the matrix type. Every formula of the transcription is in your text.
+- One sign convention for each entry, the page's own: keep its moment arrow and positive directions. Never add a convention the page does not give, and never mix two.
+- Text matches the figure: name points, forces and dimensions only with labels that the drawing or the transcription has.
 - Every listed figure goes in as `{{fig:<id>}}` on its own line, where it belongs, each id once.
 - Worked examples: state the given data, the steps, and the result with units.
 - `e<N>_changes.json` is valid JSON: `[]` when nothing changed.
@@ -58,6 +68,7 @@ description: How to add study material (photos of the board, slides, notes, exer
 ## fuse
 
 - Two uploads of the same lecture become one section. The old text is the base: keep every statement, formula, step, example and figure placeholder of it.
+- Copy formulas unchanged: brackets, exponents and arrows stay as they are.
 - Add only what the new text has and the old one lacks, at the place it belongs in the lecture's flow — never as an appendix.
 - Same content twice → keep it once, the more complete version. Contradiction → keep the correct one.
 - The result must never be shorter than the old text and must read like one section: no remarks about merging or sources.
