@@ -111,6 +111,7 @@ BAD = "badkey-0123456789abcdef"
 
 # ---------------------------------------------------------------- spaces
 sb.set_lang("en")
+os.environ["SB_CODEX_OPEN"] = "0"           # the closed case first: only the owner and the allowed people
 main = sb.Space(sb.admin_uids()[0])
 main.ensure(login="owner@example.com", name=None)
 guest = sb.Space("pub-guest")
@@ -380,7 +381,13 @@ check("Codex sign-out leaves the selection and the credentials", err is None and
 st = sb.status(sp)["engine"]
 check("the status carries the box: order, per-engine state, the chain", st["switch"]["order"] == list(en.ORDER) and set(st["switch"]["engines"]) == set(en.ORDER)
       and "chain" in st["switch"] and st["switch"]["engines"]["codex"]["allowed"] is False, st["switch"]["order"])
-check("the owner may sign in to Codex; the guest may not", sb.engines_view(main)["engines"]["codex"]["allowed"] is True)
+check("the owner may sign in to Codex; the guest may not (closed)", sb.engines_view(main)["engines"]["codex"]["allowed"] is True)
+os.environ.pop("SB_CODEX_OPEN")
+check("by default every person may sign in to Codex", sb.codex_allowed(g2) and sb.codex_allowed(guest))
+res, err = call(web.api_engines, g2, {"on": ["claude", "codex"]})
+check("... and the endpoint no longer says 403 (it says: not connected yet)", err and err[0] == 400 and "Codex" in err[1], (res, err))
+res, err = call(web.codex_login, g2)
+check("... a guest can start the Codex sign-in", err is None and res["code"] == "AB12-CD34", (res, err))
 check("the claude/openrouter engine choice still works as before", sb.status(sp)["engine"]["name"] in en.ORDER)
 
 print("\n%d failed" % len(fails) if fails else "\nall engine checks passed")

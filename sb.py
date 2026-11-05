@@ -2187,9 +2187,10 @@ def engine_label(name):
 
 
 def codex_allowed(sp):
-    """Who may sign in to Codex with a ChatGPT plan: the book's owner, and the people the owner allows on the Admin tab
-    (`codex_ok` in the profile). OpenAI's terms need its approval for an app that offers ChatGPT sign-in to other people."""
-    return sp.uid in admin_uids() or bool(sp.prof().get("codex_ok"))
+    """Who may sign in to Codex with a ChatGPT plan. By default everybody (the owner chose this). `SB_CODEX_OPEN=0` in the
+    server's .env closes it: then only the book's owner and the people the owner allows on the Admin tab (`codex_ok`).
+    OpenAI's terms say an app on a remote server that offers ChatGPT sign-in to other people needs their approval."""
+    return os.environ.get("SB_CODEX_OPEN", "1") != "0" or sp.uid in admin_uids() or bool(sp.prof().get("codex_ok"))
 
 
 def _oa_error(engine, code, text, headers=None):

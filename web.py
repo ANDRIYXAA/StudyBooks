@@ -683,6 +683,11 @@ def codex_login(request: Request):
         raise HTTPException(503, L("Codex не встановлений на сервері", "Codex is not installed on the server"))
     key = "codex:" + sp.uid
     with _logins_lock:
+        for uid, l in list(_logins.items()):
+            if time.time() - l["t"] > LOGIN_TTL:
+                _drop_login(uid)
+        if PUBLIC and key not in _logins and sum(l["proc"].poll() is None for l in _logins.values()) >= MAX_LIVE_LOGINS:
+            raise HTTPException(503, L("зараз багато входів одночасно, спробуй за хвилину", "many sign-ins are running right now, try again in a minute"))
         _drop_login(key)
         (sp.root / "codex").mkdir(exist_ok=True)
         proc = subprocess.Popen([str(codex), "login", "--device-auth"], env=sp.codex_env(), cwd=str(sp.root),
