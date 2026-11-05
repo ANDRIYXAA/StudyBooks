@@ -1180,6 +1180,23 @@ const D = [
                   n => `${n} works with your API key: paste it, the server checks it with ${n} and keeps it in a private file (it is never shown again, only the last 4 characters).`],
   ["key.ph", "Ключ API", "API key"],
   ["key.connect", "Підключити", "Connect"],
+  ["gk.intro", "Grok працює з твоїм акаунтом xAI: сервер запускає офіційний Grok CLI, ти відкриваєш посилання й підтверджуєш одноразовий код. Ключ не потрібен.",
+   "Grok works with your xAI account: the server runs the official Grok CLI, you open the link and confirm the one-time code. No key is needed."],
+  ["gk.start", "Увійти через акаунт xAI", "Sign in with an xAI account"],
+  ["gk.ok", "Grok підключено через акаунт xAI", "Grok is connected with an xAI account"],
+  ["gk.out", "Вийти з xAI", "Sign out of xAI"],
+  ["gk.missing", "Grok CLI ще не встановлений на сервері: можна лише ключ API.", "The Grok CLI is not installed on the server yet: only an API key works."],
+  ["gm.intro", "Gemini працює з твоїм акаунтом Google: сервер запускає офіційний Gemini CLI, ти відкриваєш посилання, входиш і копіюєш код, який покаже Google. Ключ не потрібен.",
+   "Gemini works with your Google account: the server runs the official Gemini CLI, you open the link, sign in, and copy the code that Google shows. No key is needed."],
+  ["gm.start", "Увійти через Google", "Sign in with Google"],
+  ["gm.step1", "Відкрий посилання й увійди", "Open the link and sign in"],
+  ["gm.step2", "Скопіюй код зі сторінки Google й встав сюди:", "Copy the code from the Google page and paste it here:"],
+  ["gm.codePh", "Код із Google", "Code from Google"],
+  ["gm.ok", "Gemini підключено через акаунт Google", "Gemini is connected with a Google account"],
+  ["gm.out", "Вийти з Google", "Sign out of Google"],
+  ["gm.orKey", "Або використати ключ API", "Or use an API key"],
+  ["gm.fail", "Вхід не вдався: ", "The sign-in failed: "],
+  ["gm.missing", "Gemini CLI ще не встановлений на сервері: можна лише ключ API.", "The Gemini CLI is not installed on the server yet: only an API key works."],
   ["key.have", (n, h) => `${n} підключено, ключ ${h}`, (n, h) => `${n} is connected, key ${h}`],
   ["key.remove", "Прибрати ключ", "Remove the key"],
   ["key.model", "Модель", "Model"],
@@ -1756,7 +1773,8 @@ function renderDlg() {
   bindSwitch();
   if (dtab === "claude") S.claude?.loggedIn ? showConnected() : showStart();
   else if (dtab === "codex") showCodex();
-  else if (dtab === "grok" || dtab === "gemini") showKeyEngine(dtab);
+  else if (dtab === "gemini") showGemini();
+  else if (dtab === "grok") showGrok();
   else showOpenRouter();
 }
 async function useEngine(engine, model) {
@@ -1874,33 +1892,82 @@ function showCodex(note) {
 }
 async function codexStart() {
   $("#cxStart").disabled = true;
-  const r = await postJSON("/api/codex/login");
-  if (!r.ok) { showCodex(t("codex.fail") + r.message); return; }
-  $("#cxSteps").innerHTML = `<ol><li><a class="btn primary" href="${esc(r.j.url)}" target="_blank" rel="noopener noreferrer">${esc(t("codex.step1"))}</a></li>
+  deviceSignIn("codex", "/api/codex/login", "/api/codex/status", $("#cxSteps"), msg => showCodex(msg));      // deviceSignIn is shared with Grok
+}
+/* a device-code sign-in (Grok): the link and the code are shown, the page asks the server every 2 seconds until it is done */
+async function deviceSignIn(name, loginUrl, statusUrl, host, onFail) {
+  const r = await postJSON(loginUrl);
+  if (!r.ok) { onFail(t("gm.fail") + r.message); return; }
+  host.innerHTML = `<ol><li><a class="btn primary" href="${esc(r.j.url)}" target="_blank" rel="noopener noreferrer">${esc(t("codex.step1"))}</a></li>
     <li>${esc(t("codex.step2"))} <strong class="mono">${esc(r.j.code || r.j.text || "")}</strong></li><li class="muted">${esc(t("codex.step3"))}</li></ol>`;
   for (let i = 0; i < 450; i++) {                      // the one-time code lives about 15 minutes
     await sleep(2000);
-    if (!$("#cxSteps")) return;                       // the dialog was closed or redrawn
-    const s = await (await fetch("/api/codex/status")).json().catch(() => ({}));
+    if (!host.isConnected) return;                      // the dialog was closed or redrawn
+    const s = await (await fetch(statusUrl)).json().catch(() => ({}));
     if (s.loggedIn && !s.pending) { await refresh(); renderDlg(); return; }
-    if (!s.pending) { showCodex(t("codex.fail") + (s.text || "")); return; }
+    if (!s.pending) { onFail(t("gm.fail") + (s.text || "")); return; }
   }
 }
-async function showKeyEngine(n, note) {
+async function showGrok(note) {
+  const e = S.engine?.switch?.engines?.grok || {};
+  const keyBox = `<details id="gkKeyBox" style="margin-top:14px" ${e.hasKey ? "open" : ""}><summary class="small">${esc(t("gm.orKey"))}</summary><div id="gkKey"></div></details>`;
+  if (e.cli) {
+    eb().innerHTML = `<p>${esc(t("gk.ok"))}</p><div class="row"><button class="btn" id="gkOut">${esc(t("gk.out"))}</button></div>${keyBox}`;
+    $("#gkOut").onclick = async () => { await apiPost("/api/grok/logout", {}); await refresh(); renderDlg(); };
+  } else if (!e.cliInstalled) {
+    eb().innerHTML = `<p class="small warn">${esc(t("gk.missing"))}</p>${keyBox}`;
+  } else {
+    eb().innerHTML = `<p class="small">${esc(t("gk.intro"))}</p>${note ? `<p class="msg bad">${esc(note)}</p>` : ""}
+      <button class="btn primary" id="gkStart">${esc(t("gk.start"))}</button><div id="gkSteps"></div>${keyBox}`;
+    $("#gkStart").onclick = () => { $("#gkStart").disabled = true; deviceSignIn("grok", "/api/grok/login", "/api/grok/status", $("#gkSteps"), msg => showGrok(msg)); };
+  }
+  showKeyEngine("grok", "", $("#gkKey"));
+}
+async function showGemini(note) {
+  const e = S.engine?.switch?.engines?.gemini || {};
+  const keyBox = `<details id="gmKeyBox" style="margin-top:14px" ${e.hasKey ? "open" : ""}><summary class="small">${esc(t("gm.orKey"))}</summary><div id="gmKey"></div></details>`;
+  if (e.cli) {
+    eb().innerHTML = `<p>${esc(t("gm.ok"))}</p><div class="row"><button class="btn" id="gmOut">${esc(t("gm.out"))}</button></div><div class="msg" id="gmMsg"></div>${keyBox}`;
+    $("#gmOut").onclick = async () => { await apiPost("/api/gemini/logout", {}); await refresh(); renderDlg(); };
+  } else if (!e.cliInstalled) {
+    eb().innerHTML = `<p class="small warn">${esc(t("gm.missing"))}</p>${keyBox}`;
+  } else {
+    eb().innerHTML = `<p class="small">${esc(t("gm.intro"))}</p>${note ? `<p class="msg bad">${esc(note)}</p>` : ""}
+      <button class="btn primary" id="gmStart">${esc(t("gm.start"))}</button><div id="gmSteps"></div>${keyBox}`;
+    $("#gmStart").onclick = async () => {
+      $("#gmStart").disabled = true;
+      const r = await postJSON("/api/gemini/login");
+      if (!r.ok) { showGemini(t("gm.fail") + r.message); return; }
+      $("#gmSteps").innerHTML = `<ol><li><a class="btn primary" href="${esc(r.j.url)}" target="_blank" rel="noopener noreferrer">${esc(t("gm.step1"))}</a></li>
+        <li>${esc(t("gm.step2"))}</li></ol><input type="text" id="gmCode" placeholder="${esc(t("gm.codePh"))}" autocomplete="off" spellcheck="false">
+        <div class="row" style="margin-top:10px"><button class="btn primary" id="gmGo">${esc(t("key.connect"))}</button></div><div class="msg" id="gmMsg"></div>`;
+      $("#gmGo").onclick = async () => {
+        const code = $("#gmCode").value.trim(); if (!code) return;
+        $("#gmGo").disabled = true; $("#gmMsg").textContent = t("key.checking"); $("#gmMsg").className = "msg";
+        const c = await postJSON("/api/gemini/code", {code});
+        if (c.ok && c.j.ok) { await refresh(); renderDlg(); }
+        else { $("#gmMsg").textContent = t("gm.fail") + (c.ok ? (c.j.message || "") : c.message); $("#gmMsg").className = "msg bad"; $("#gmGo").disabled = false; }
+      };
+    };
+  }
+  showKeyEngine("gemini", "", $("#gmKey"));
+}
+async function showKeyEngine(n, note, host) {
+  host = host || eb();
   const e = S.engine?.switch?.engines?.[n] || {}, name = e.label || n;
   if (!e.hasKey) {
-    eb().innerHTML = `<p class="small">${esc(t("key.intro", name))}</p>${note ? `<p class="msg bad">${esc(note)}</p>` : ""}
+    host.innerHTML = `<p class="small">${esc(t("key.intro", name))}</p>${note ? `<p class="msg bad">${esc(note)}</p>` : ""}
       <input type="password" id="keyIn" placeholder="${esc(t("key.ph"))}" autocomplete="off" spellcheck="false">
       <div class="row" style="margin-top:10px"><button class="btn primary" id="keyGo">${esc(t("key.connect"))}</button></div><div class="msg" id="keyMsg"></div>`;
     $("#keyGo").onclick = async () => {
       const k = $("#keyIn").value.trim(); if (!k) return;
       $("#keyGo").disabled = true; $("#keyMsg").textContent = t("key.checking"); $("#keyMsg").className = "msg";
       const r = await postJSON("/api/engine/key", {engine: n, key: k});
-      if (r.ok) { await refresh(); renderDlg(); } else showKeyEngine(n, t("key.fail") + r.message);
+      if (r.ok) { await refresh(); renderDlg(); } else showKeyEngine(n, t("key.fail") + r.message, host);
     };
     return;
   }
-  eb().innerHTML = `<p>${esc(t("key.have", name, e.hint || ""))}</p>
+  host.innerHTML = `<p>${esc(t("key.have", name, e.hint || ""))}</p>
     <label class="f">${esc(t("key.model"))}</label><div class="row"><select id="keyModel" style="flex:1"><option value="${esc(e.model || "")}">${esc(e.model || "…")}</option></select>
       <button class="btn" id="keySave">${esc(t("key.save"))}</button></div>
     <div class="row" style="margin-top:8px"><button class="btn" id="keyDel">${esc(t("key.remove"))}</button></div><div class="msg" id="keyMsg"></div>`;

@@ -21,9 +21,9 @@ A person selects the engines to use in the "switch between" box. There are five 
 |---|---|
 | Claude Code | The unmodified command-line tool with the own sign-in of the person. |
 | OpenRouter | The own API key of the person. Free models can switch by themselves. |
-| Codex | The unmodified command-line tool with a ChatGPT sign-in. This engine is for the book owner only. |
-| Grok | The own API key of the person (xAI). |
-| Gemini | The own API key of the person (Google). |
+| Codex | The unmodified command-line tool with a ChatGPT sign-in. Every person can connect it. |
+| Grok | The Grok Build command-line tool with an xAI account sign-in, or an API key. |
+| Gemini | The Gemini command-line tool with a Google account sign-in, or an API key. |
 
 The selected engines work from left to right. When an engine reaches its limit, it rests, and the same call continues on the next engine. A note tells the new engine which files the work folder already holds. The first engine works again when its limit is back.
 

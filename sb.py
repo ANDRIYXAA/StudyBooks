@@ -453,6 +453,48 @@ class Space:
     def forget_codex_status(self):
         (self.root / "codex_status.json").unlink(missing_ok=True)
 
+    # ---- Grok: the official Grok Build CLI with an xAI sign-in (the API key way stays as the other option)
+    def grok_home(self):
+        return self.root / "grok"
+
+    def grok_cli_ok(self):
+        """Signed in: the CLI keeps its credentials in <HOME>/.grok/auth.json, and HOME is this person's own folder."""
+        return grok_bin().exists() and (self.grok_home() / ".grok" / "auth.json").is_file()
+
+    def grok_env(self):
+        env = {k: v for k, v in os.environ.items() if k not in ("XAI_API_KEY", "GROK_DEPLOYMENT_KEY")}
+        self.grok_home().mkdir(parents=True, exist_ok=True)
+        env["HOME"] = str(self.grok_home())
+        env["BROWSER"] = "true"
+        return env
+
+    def grok_forget(self):
+        (self.grok_home() / ".grok" / "auth.json").unlink(missing_ok=True)
+
+    # ---- Gemini: the official CLI with a Google sign-in (the API key way stays as the other option)
+    def gemini_home(self):
+        return self.root / "gemini"
+
+    def gemini_cli_ok(self):
+        """Signed in with a Google account: the CLI keeps its credentials in GEMINI_CLI_HOME/.gemini/oauth_creds.json."""
+        return gemini_bin().exists() and (self.gemini_home() / ".gemini" / "oauth_creds.json").is_file()
+
+    def gemini_prepare(self):
+        """The folder and the setting that make the CLI use the Google sign-in (never a key from the server's environment)."""
+        d = self.gemini_home() / ".gemini"
+        d.mkdir(parents=True, exist_ok=True)
+        f = d / "settings.json"
+        if not f.exists():
+            write_json(f, {"security": {"auth": {"selectedType": "oauth-personal"}}})
+
+    def gemini_env(self):
+        env = {k: v for k, v in os.environ.items() if k not in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENAI_USE_VERTEXAI")}
+        env.update(GEMINI_CLI_HOME=str(self.gemini_home()), NO_BROWSER="true")
+        return env
+
+    def gemini_forget(self):
+        (self.gemini_home() / ".gemini" / "oauth_creds.json").unlink(missing_ok=True)
+
     def engine_connected(self, name):
         """Can this engine work for this person right now (signed in, or a key and a model)? Limits are not looked at."""
         if name == "claude":
@@ -461,6 +503,8 @@ class Space:
             return bool(self.or_has_key_or_donor() and self.or_model())
         if name == "codex":
             return bool(self.codex_status().get("loggedIn"))
+        if (name == "gemini" and self.gemini_cli_ok()) or (name == "grok" and self.grok_cli_ok()):
+            return True
         if name in en.PROVIDERS:
             return bool(self.engine_key(name) and self.engine_model(name))
         return False
@@ -2182,6 +2226,18 @@ def codex_bin():
     return Path(os.environ.get("SB_CODEX", CODEX))
 
 
+GEMINI = Path.home() / ".local" / "gemini-cli" / "node_modules" / ".bin" / "gemini"
+GROK = Path.home() / ".local" / "grok-cli" / "bin" / "grok"
+
+
+def grok_bin():
+    return Path(os.environ.get("SB_GROK_CLI", GROK))
+
+
+def gemini_bin():
+    return Path(os.environ.get("SB_GEMINI_CLI", GEMINI))
+
+
 def engine_label(name):
     return en.LABEL.get(name, name)
 
@@ -2342,11 +2398,113 @@ def run_codex(sp, prompt, cwd, add_dirs=(), timeout=2400, need_vision=False, rol
     return {"result": res["text"], "num_turns": res["messages"], "model": model or "codex"}
 
 
+def run_grok_cli(sp, prompt, cwd, add_dirs=(), timeout=2400, need_vision=False, role=None):
+    """The Grok Build CLI as this person (their xAI sign-in in their own HOME). Headless run, the prompt from a file: file edits
+    are approved by themselves (`acceptEdits`), everything else is not (nobody can approve it), no web search."""
+    grok = grok_bin()
+    if not grok.exists():
+        raise AuthError(L("Grok CLI не встановлений на сервері", "The Grok CLI is not installed on the server"))
+    brief = agent_brief(role)
+    text = (brief + "\n\n---\n\n" if brief else "") + prompt + \
+        "\n\nNobody can answer questions: never ask any. Write every output file the task asks for in the current directory, then finish with one short line."
+    tmp = sp.root / "tmp"
+    tmp.mkdir(exist_ok=True)
+    pf = tmp / f"grok-{uuid.uuid4().hex[:8]}.txt"
+    pf.write_text(text, encoding="utf-8")
+    cmd = [str(grok), "--prompt-file", str(pf), "--output-format", "json", "--permission-mode", "acceptEdits", "--cwd", str(cwd),
+           "--disable-web-search", "--max-turns", str(ROLE_TURNS.get(role, 120))]
+    model = sp.prof().get("grok_cli_model")
+    if model:
+        cmd += ["-m", model]
+    for d in add_dirs:
+        cmd += ["--add-dir", str(d)]
+    t0 = time.time()
+    set_status(cur_model=model or "grok", cur_engine="grok", cur_donor=None)
+    try:
+        p = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, text=True,
+                             env=sp.grok_env(), start_new_session=True)
+        stdout, stderr = watch_process(sp, p, timeout, "Grok")
+    finally:
+        pf.unlink(missing_ok=True)
+    out, errs = {}, []
+    dec = json.JSONDecoder()
+    for line in (stdout or "").splitlines():
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                ev = dec.raw_decode(line)[0]
+            except ValueError:
+                continue
+            if isinstance(ev, dict):
+                if ev.get("type") == "error":
+                    errs.append(str(ev.get("message") or ""))
+                else:
+                    out = ev
+    if p.returncode != 0 or errs:
+        detail = " ".join((errs[-1] if errs else stderr or stdout or "").split())[-500:] or f"exit {p.returncode}"
+        kind = en.classify(detail)
+        if kind == "auth" or "not signed in" in detail.lower():
+            sp.grok_forget()
+            raise AuthError(L("Grok не авторизований: ", "Grok is not signed in: ") + detail[:300])
+        if kind == "limit":
+            raise TransientError(L("Grok тимчасово недоступний: ", "Grok is temporarily unavailable: ") + detail[:300])
+        raise RuntimeError(L("помилка Grok: ", "Grok error: ") + detail[:600])
+    log(f"[{sp.uid}] grok-cli {role or '-'} ok in {time.time() - t0:.0f}s cwd={cwd}")
+    reply = next((out[k] for k in ("result", "response", "text", "content", "message") if isinstance(out.get(k), str)), "")
+    return {"result": reply, "num_turns": 1, "model": model or "grok"}
+
+
+def run_gemini_cli(sp, prompt, cwd, add_dirs=(), timeout=2400, need_vision=False, role=None):
+    """The official Gemini CLI as this person (their Google sign-in in GEMINI_CLI_HOME). Headless run: the prompt comes on stdin,
+    file edits are approved by themselves (`auto_edit`), shell commands are not (nobody can approve them), and the tools stay
+    inside the work dir (the reference folders are added for reading)."""
+    gem = gemini_bin()
+    if not gem.exists():
+        raise AuthError(L("Gemini CLI не встановлений на сервері", "The Gemini CLI is not installed on the server"))
+    sp.gemini_prepare()
+    brief = agent_brief(role)
+    text = (brief + "\n\n---\n\n" if brief else "") + prompt + \
+        "\n\nNobody can answer questions: never ask any. Write every output file the task asks for in the current directory, then finish with one short line."
+    cmd = [str(gem), "--skip-trust", "--approval-mode", "auto_edit", "-o", "json", "-p", "Do the task that is given on standard input."]
+    model = sp.prof().get("gemini_cli_model")
+    if model:
+        cmd += ["-m", model]
+    if add_dirs:
+        cmd += ["--include-directories", ",".join(str(d) for d in add_dirs)]
+    t0 = time.time()
+    set_status(cur_model=model or "gemini", cur_engine="gemini", cur_donor=None)
+    p = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE, text=True,
+                         env=sp.gemini_env(), start_new_session=True)
+    stdout, stderr = watch_process(sp, p, timeout, "Gemini", input=text)
+    out = {}
+    try:
+        out = json.JSONDecoder().raw_decode(stdout[stdout.index("{"):])[0] if "{" in (stdout or "") else {}
+    except ValueError:
+        out = {}
+    out = out if isinstance(out, dict) else {}
+    err = out.get("error") if isinstance(out.get("error"), dict) else {}
+    if p.returncode != 0 or err:
+        detail = " ".join(str(err.get("message") or stderr or stdout or "").split())[-500:] or f"exit {p.returncode}"
+        kind = en.classify(detail)
+        if p.returncode == 41 or kind == "auth":
+            sp.gemini_forget()
+            raise AuthError(L("Gemini не авторизований: ", "Gemini is not signed in: ") + detail[:300])
+        if kind == "limit":
+            raise TransientError(L("Gemini тимчасово недоступний: ", "Gemini is temporarily unavailable: ") + detail[:300])
+        raise RuntimeError(L("помилка Gemini: ", "Gemini error: ") + detail[:600])
+    log(f"[{sp.uid}] gemini-cli {role or '-'} ok in {time.time() - t0:.0f}s cwd={cwd}")
+    return {"result": str(out.get("response") or ""), "num_turns": 1, "model": model or "gemini"}
+
+
 def run_engine(sp, name, prompt, cwd, add_dirs, timeout, need_vision, role, max_usd):
     if name == "openrouter":
         return run_openrouter(sp, prompt, cwd, add_dirs, timeout, need_vision, role)
     if name == "codex":
         return run_codex(sp, prompt, cwd, add_dirs, timeout, need_vision, role)
+    if name == "gemini" and sp.gemini_cli_ok():          # the account sign-in first; the key (run_oa) when there is no sign-in
+        return run_gemini_cli(sp, prompt, cwd, add_dirs, timeout, need_vision, role)
+    if name == "grok" and sp.grok_cli_ok():
+        return run_grok_cli(sp, prompt, cwd, add_dirs, timeout, need_vision, role)
     if name in en.PROVIDERS:
         return run_oa(sp, name, prompt, cwd, add_dirs, timeout, need_vision, role)
     return run_claude(sp, prompt, cwd, add_dirs, timeout, role, max_usd)
@@ -2411,6 +2569,10 @@ def engines_view(sp):
         if n in en.PROVIDERS:
             k = sp.engine_key(n)
             d["hasKey"], d["hint"] = bool(k), ("…" + k[-4:]) if k else None
+        if n == "gemini":
+            d.update(cli=sp.gemini_cli_ok(), cliInstalled=gemini_bin().exists())
+        if n == "grok":
+            d.update(cli=sp.grok_cli_ok(), cliInstalled=grok_bin().exists())
         if n == "codex":
             cs = sp.codex_status() if owner else {}
             d.update(loggedIn=bool(cs.get("loggedIn")), text=cs.get("text"), allowed=owner,

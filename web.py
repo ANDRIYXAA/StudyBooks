@@ -26,6 +26,8 @@ import os
 import re
 import shutil
 import subprocess
+import pty
+import signal
 import threading
 import base64
 import time
@@ -444,7 +446,15 @@ def api_status(request: Request):
 def _drop_login(uid):
     l = _logins.pop(uid, None)
     if l and l["proc"].poll() is None:
-        l["proc"].kill()
+        try:
+            os.killpg(l["proc"].pid, signal.SIGKILL)         # a CLI that runs in its own process group (the Gemini one) goes with its children
+        except (ProcessLookupError, PermissionError, OSError):
+            l["proc"].kill()
+    if l and l.get("fd") is not None:
+        try:
+            os.close(l["fd"])
+        except OSError:
+            pass
 
 
 def _reader(proc, buf):
@@ -675,13 +685,38 @@ async def api_engine_model(request: Request):
 
 @app.post("/api/codex/login")
 def codex_login(request: Request):
-    """Start the Codex sign-in with a one-time code (`codex login --device-auth`, the unmodified CLI): the owner opens the
-    link, enters the code, and Codex stores its own credentials. Owner only (see the note at the engines in sb.py)."""
+    """Start the Codex sign-in with a one-time code (`codex login --device-auth`, the unmodified CLI): the person opens the link,
+    enters the code, and Codex stores its own credentials."""
     sp = need_codex(request)
     codex = sb.codex_bin()
     if not codex.exists():
         raise HTTPException(503, L("Codex не встановлений на сервері", "Codex is not installed on the server"))
-    key = "codex:" + sp.uid
+    (sp.root / "codex").mkdir(exist_ok=True)
+    return _device_login(sp, "codex", [str(codex), "login", "--device-auth"], sp.codex_env(), str(sp.root))
+
+
+@app.get("/api/codex/status")
+def codex_login_status(request: Request):
+    sp = need_codex(request)
+    r = _device_status(sp, "codex", lambda fresh: sp.codex_status(fresh=fresh).get("loggedIn"))
+    return r | {"text": sp.codex_status().get("text")}
+
+
+def _fd_reader(fd, buf):
+    while True:
+        try:
+            chunk = os.read(fd, 4096)
+        except OSError:
+            break
+        if not chunk:
+            break
+        buf.extend(chunk)
+
+
+def _device_login(sp, name, cmd, env, cwd):
+    """Start a device-code sign-in of a CLI (`codex login --device-auth`, `grok login --device-auth`): the CLI prints a link and a
+    one-time code and waits until the person has confirmed it in their browser. The CLI keeps its own credentials."""
+    key = name + ":" + sp.uid
     with _logins_lock:
         for uid, l in list(_logins.items()):
             if time.time() - l["t"] > LOGIN_TTL:
@@ -689,9 +724,7 @@ def codex_login(request: Request):
         if PUBLIC and key not in _logins and sum(l["proc"].poll() is None for l in _logins.values()) >= MAX_LIVE_LOGINS:
             raise HTTPException(503, L("зараз багато входів одночасно, спробуй за хвилину", "many sign-ins are running right now, try again in a minute"))
         _drop_login(key)
-        (sp.root / "codex").mkdir(exist_ok=True)
-        proc = subprocess.Popen([str(codex), "login", "--device-auth"], env=sp.codex_env(), cwd=str(sp.root),
-                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        proc = subprocess.Popen(cmd, env=env, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
         buf = bytearray()
         threading.Thread(target=_reader, args=(proc, buf), daemon=True).start()
         _logins[key] = {"proc": proc, "buf": buf, "t": time.time()}
@@ -705,24 +738,123 @@ def codex_login(request: Request):
     if not url:
         with _logins_lock:
             _drop_login(key)
-        raise HTTPException(500, L("Codex не видав посилання для входу: ", "Codex gave no sign-in link: ") + text[-300:])
+        raise HTTPException(500, L("не вдалося почати вхід: ", "could not start the sign-in: ") + text[-300:])
     return {"ok": True, "url": url, "code": code, "text": text[-300:] if not code else ""}
 
 
-@app.get("/api/codex/status")
-def codex_login_status(request: Request):
-    """The sign-in goes on while the process runs; when it ends, the status says if Codex is signed in now."""
-    sp = need_codex(request)
+def _device_status(sp, name, connected):
+    """The sign-in goes on while the process runs; when it ends, `connected()` says if the person is signed in now."""
+    key = name + ":" + sp.uid
     with _logins_lock:
-        l = _logins.get("codex:" + sp.uid)
+        l = _logins.get(key)
     running = bool(l and l["proc"].poll() is None)
     if l and not running:
         with _logins_lock:
-            _drop_login("codex:" + sp.uid)
-    st = sp.codex_status(fresh=not running)
-    if st.get("loggedIn") and not running:
+            _drop_login(key)
+    ok = bool(connected(not running))
+    if ok and not running:
         sp.update_profile(blocked=None, blocked_at=None)
-    return {"pending": running, "loggedIn": bool(st.get("loggedIn")), "text": st.get("text")}
+    return {"pending": running, "loggedIn": ok}
+
+
+@app.post("/api/grok/login")
+def grok_login(request: Request):
+    sp = who(request)
+    grok = sb.grok_bin()
+    if not grok.exists():
+        raise HTTPException(503, L("Grok CLI не встановлений на сервері", "The Grok CLI is not installed on the server"))
+    return _device_login(sp, "grok", [str(grok), "login", "--device-auth"], sp.grok_env(), str(sp.grok_home()))
+
+
+@app.get("/api/grok/status")
+def grok_login_status(request: Request):
+    sp = who(request)
+    return _device_status(sp, "grok", lambda fresh: sp.grok_cli_ok())
+
+
+@app.post("/api/grok/logout")
+def grok_logout(request: Request):
+    sp = who(request)
+    sp.grok_forget()
+    on = [e for e in sp.engines_on() if e != "grok" or sp.engine_connected("grok")]
+    sp.update_profile(engines_on=on or None, engine=on[0] if on else None)
+    return {"ok": True, "switch": sb.engines_view(sp)}
+
+
+@app.post("/api/gemini/login")
+def gemini_login(request: Request):
+    """Start the Google sign-in of the Gemini CLI. The CLI wants a terminal, so it runs in a pseudo-terminal: it prints a
+    link, the person signs in with their Google account and copies the code that Google shows, and /api/gemini/code types
+    that code into the terminal. The CLI keeps its own credentials; this app never reads them."""
+    sp = who(request)
+    gem = sb.gemini_bin()
+    if not gem.exists():
+        raise HTTPException(503, L("Gemini CLI не встановлений на сервері", "The Gemini CLI is not installed on the server"))
+    key = "gemini:" + sp.uid
+    with _logins_lock:
+        for uid, l in list(_logins.items()):
+            if time.time() - l["t"] > LOGIN_TTL:
+                _drop_login(uid)
+        if PUBLIC and key not in _logins and sum(l["proc"].poll() is None for l in _logins.values()) >= MAX_LIVE_LOGINS:
+            raise HTTPException(503, L("зараз багато входів одночасно, спробуй за хвилину", "many sign-ins are running right now, try again in a minute"))
+        _drop_login(key)
+        sp.gemini_prepare()
+        m, s = pty.openpty()
+        env = sp.gemini_env() | {"TERM": "xterm", "COLUMNS": "220", "LINES": "50"}
+        proc = subprocess.Popen([str(gem), "--skip-trust"], stdin=s, stdout=s, stderr=s, env=env, cwd=str(sp.gemini_home()), start_new_session=True)
+        os.close(s)
+        buf = bytearray()
+        threading.Thread(target=_fd_reader, args=(m, buf), daemon=True).start()
+        _logins[key] = {"proc": proc, "buf": buf, "t": time.time(), "fd": m}
+    url = None
+    for _ in range(200):
+        text = re.sub(r"\x1b\[[0-9;?<]*[A-Za-z]", "", bytes(buf).decode("utf-8", "replace"))
+        mt = re.search(r"https://accounts\.google\.com/\S+", text)
+        if mt:
+            url = mt.group(0)
+            break
+        if proc.poll() is not None:
+            break
+        time.sleep(0.1)
+    if not url:
+        with _logins_lock:
+            _drop_login(key)
+        raise HTTPException(500, L("Gemini CLI не видав посилання для входу: ", "The Gemini CLI gave no sign-in link: ") + text[-300:])
+    return {"ok": True, "url": url}
+
+
+@app.post("/api/gemini/code")
+async def gemini_code(request: Request):
+    sp = who(request)
+    code = ((await json_body(request)).get("code") or "").strip()
+    if not code or len(code) > 500 or any(c in code for c in "\r\n"):
+        raise HTTPException(400, L("встав код зі сторінки Google", "paste the code from Google's page"))
+    with _logins_lock:
+        l = _logins.get("gemini:" + sp.uid)
+    if not l or l["proc"].poll() is not None:
+        raise HTTPException(409, L("вхід не розпочато або він завершився: почни ще раз", "the sign-in was not started or has ended: start it again"))
+    os.write(l["fd"], (code + "\r").encode())
+    for _ in range(300):                                  # up to 30 s for the CLI to store the credentials
+        if sp.gemini_cli_ok():
+            break
+        time.sleep(0.1)
+    ok = sp.gemini_cli_ok()
+    text = re.sub(r"\x1b\[[0-9;?<]*[A-Za-z]", "", bytes(l["buf"]).decode("utf-8", "replace"))
+    with _logins_lock:
+        _drop_login("gemini:" + sp.uid)
+    if ok:
+        sp.update_profile(blocked=None, blocked_at=None)
+        kick()
+    return {"ok": ok, "message": None if ok else text[-300:]}
+
+
+@app.post("/api/gemini/logout")
+def gemini_logout(request: Request):
+    sp = who(request)
+    sp.gemini_forget()
+    on = [e for e in sp.engines_on() if e != "gemini" or sp.engine_connected("gemini")]
+    sp.update_profile(engines_on=on or None, engine=on[0] if on else None)
+    return {"ok": True, "switch": sb.engines_view(sp)}
 
 
 @app.post("/api/codex/logout")

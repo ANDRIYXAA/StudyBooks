@@ -19,6 +19,8 @@ os.environ["SB_SV_PORTS"] = ""
 FAKES = HERE if (HERE / "fake_claude.py").exists() else HERE / "tests"      # the fakes sit in tests/ of a test copy
 os.environ["SB_CLAUDE"] = str(FAKES / "fake_claude.py")
 os.environ["SB_CODEX"] = str(FAKES / "fake_codex.py")
+os.environ["SB_GEMINI_CLI"] = str(FAKES / "fake_gemini.py")
+os.environ["SB_GROK_CLI"] = str(FAKES / "fake_grok.py")
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent))
 sys.path.insert(0, str(FAKES))
@@ -377,10 +379,135 @@ check("the owner can select Codex now", err is None and main.engines_on() == ["c
 res, err = call(web.codex_logout, main)
 check("Codex sign-out leaves the selection and the credentials", err is None and not main.engine_connected("codex") and main.engines_on() == ["claude"])
 
+
+# ---------------------------------------------------------------- Gemini with a Google sign-in (the official CLI in a pseudo-terminal)
+for k in ("FAKE_GEMINI", "FAKE_ERROR", "FAKE_CODEX"):
+    os.environ.pop(k, None)
+os.environ["FAKE_GEMINI_LOG"] = str(Path(os.environ["SB_DATA"]) / "gemini.log")
+g3 = sb.Space("pub-three")
+g3.ensure(login="three", name=None)
+check("without a sign-in or a key Gemini is not connected", not g3.engine_connected("gemini") and not sb.engines_view(g3)["engines"]["gemini"]["cli"])
+res, err = call(web.gemini_login, g3)
+check("Gemini sign-in: the link comes back (the CLI runs in a terminal)", err is None and res["url"].startswith("https://accounts.google.com/"), (res, err))
+res, err = call(web.gemini_code, g3, {"code": "WRONG"})
+check("Gemini sign-in: a wrong code is not a sign-in", err is None and res["ok"] is False and not g3.engine_connected("gemini"), (res, err))
+res, err = call(web.gemini_login, g3)
+res, err = call(web.gemini_code, g3, {"code": "GOODCODE"})
+check("Gemini sign-in: the right code stores the credentials and the engine is connected", err is None and res["ok"] is True and g3.gemini_cli_ok() and g3.engine_connected("gemini"), (res, err))
+check("... the sign-in process is ended by the app", "gemini:" + g3.uid not in web._logins)
+check("... the view says it is a Google sign-in", sb.engines_view(g3)["engines"]["gemini"]["cli"] is True)
+res, err = call(web.gemini_code, g3, {"code": "GOODCODE"})
+check("a code without a started sign-in is a 409", err and err[0] == 409, (res, err))
+res, err = call(web.gemini_code, g3, {"code": ""})
+check("an empty code is a 400", err and err[0] == 400, (res, err))
+w = work("gm1")
+r = sb.run_gemini_cli(g3, "do the gemini task", w, add_dirs=[HERE], role="clean")
+gl = [json.loads(l) for l in Path(os.environ["FAKE_GEMINI_LOG"]).read_text().splitlines()]
+check("Gemini CLI: the prompt goes on stdin with the skill in front, the answer is read from the JSON", r["result"] == "Done by gemini." and (w / "gemini_out.txt").exists()
+      and "do the gemini task" in gl[-1]["prompt"] and "Skill `studybooks-material`" in gl[-1]["prompt"], gl[-1])
+check("... auto_edit (no shell), JSON output, the reference folder added, trust skipped", "auto_edit" in gl[-1]["args"] and "json" in gl[-1]["args"] and "--include-directories" in gl[-1]["args"]
+      and str(HERE) in gl[-1]["args"][gl[-1]["args"].index("--include-directories") + 1] and "--skip-trust" in gl[-1]["args"], gl[-1]["args"])
+check("... its own GEMINI_CLI_HOME, run in the work dir, and no key from the server's environment", gl[-1]["home"] == str(g3.gemini_home()) and gl[-1]["cwd"] == str(w) and gl[-1]["env_key"] is None)
+for mode, exc, why in (("limit", sb.TransientError, "a quota limit"), ("auth", sb.AuthError, "a sign-in problem"), ("fail", RuntimeError, "another failure")):
+    os.environ["FAKE_GEMINI"] = mode
+    try:
+        sb.run_gemini_cli(g3, "x", work("gm-" + mode))
+        check(f"Gemini CLI: {why} is told apart", False)
+    except Exception as e:
+        check(f"Gemini CLI: {why} is told apart", type(e) is exc, type(e).__name__)
+    if mode == "auth":
+        check("... a refused sign-in is forgotten", not g3.gemini_cli_ok())
+        (g3.gemini_home() / ".gemini" / "oauth_creds.json").write_text("{}")
+os.environ.pop("FAKE_GEMINI")
+check("the quota text gives the rest time", en.cool_seconds("[API Error: 429 Quota exceeded. Please retry in 3 hours.]") == 3 * 3600)
+# run_llm uses the CLI when signed in, the key when not
+g3.update_profile(engines_on=["gemini"], engine="gemini")
+Path(os.environ["FAKE_GEMINI_LOG"]).unlink()
+sb.run_llm(g3, "via the cli", work("gm2"), role="clean")
+check("run_llm: Gemini with a Google sign-in uses the CLI", Path(os.environ["FAKE_GEMINI_LOG"]).exists())
+g3.gemini_forget()
+sb.oa_set_key(g3, "gemini", "AIzaKey-0123456789abcdefghijklmnop")
+Path(os.environ["FAKE_GEMINI_LOG"]).unlink()
+sb.run_llm(g3, "via the key", work("gm3"), role="clean")
+check("... and with only an API key it uses the key loop", not Path(os.environ["FAKE_GEMINI_LOG"]).exists() and (work("gm3") / "oa_out.txt").exists())
+# switching: Claude at its limit, Gemini (CLI) takes over
+(g3.gemini_home() / ".gemini" / "oauth_creds.json").write_text("{}")
+g3.update_profile(engines_on=["claude", "gemini"], engine="claude")
+os.environ["FAKE_ERROR"] = "429 rate limit"
+w = work("gm4")
+sb.run_llm(g3, "switch to gemini", w, role="clean")
+os.environ.pop("FAKE_ERROR")
+check("a Claude limit hands the call to Gemini with a Google sign-in", (w / "gemini_out.txt").exists() and "claude" in g3.engine_cool_get())
+res, err = call(web.gemini_logout, g3)
+check("Gemini sign-out removes the credentials and keeps the engine only if a key is there", err is None and not g3.gemini_cli_ok() and g3.engine_connected("gemini"), (res, err))
+
+
+# ---------------------------------------------------------------- Grok with an xAI sign-in (the official Grok Build CLI, device code)
+for k in ("FAKE_GEMINI", "FAKE_ERROR", "FAKE_CODEX", "FAKE_GROK"):
+    os.environ.pop(k, None)
+os.environ["FAKE_GROK_LOG"] = str(Path(os.environ["SB_DATA"]) / "grok.log")
+g4 = sb.Space("pub-four")
+g4.ensure(login="four", name=None)
+check("without a sign-in or a key Grok is not connected", not g4.engine_connected("grok") and not sb.engines_view(g4)["engines"]["grok"]["cli"])
+res, err = call(web.grok_login, g4)
+check("Grok sign-in: the link and the one-time code come back", err is None and res["url"].startswith("https://accounts.x.ai/oauth2/device") and res["code"] == "AB12-CD34", (res, err))
+res, err = call(web.grok_login_status, g4)
+check("... the sign-in is pending while the process runs", err is None and res["pending"] is True and res["loggedIn"] is False, (res, err))
+time.sleep(2.5)
+res, err = call(web.grok_login_status, g4)
+check("... and when it ends Grok is signed in, with the credentials in this person's own HOME", err is None and res["loggedIn"] is True and res["pending"] is False
+      and (g4.grok_home() / ".grok" / "auth.json").exists() and g4.engine_connected("grok"), (res, err))
+check("... the view says it is an account sign-in", sb.engines_view(g4)["engines"]["grok"]["cli"] is True)
+os.environ["XAI_API_KEY"] = "xai-server-key-must-not-pass"
+check("the CLI never gets a key from the server's environment, and HOME is the person's own", "XAI_API_KEY" not in g4.grok_env() and g4.grok_env()["HOME"] == str(g4.grok_home()))
+w = work("gk1")
+r = sb.run_grok_cli(g4, "do the grok task", w, add_dirs=[HERE], role="clean")
+gl = [json.loads(l) for l in Path(os.environ["FAKE_GROK_LOG"]).read_text().splitlines()]
+check("Grok CLI: the prompt goes in a file with the skill in front, the answer is read from the JSON", r["result"] == "Done by grok." and (w / "grok_out.txt").exists()
+      and "do the grok task" in gl[-1]["prompt"] and "Skill `studybooks-material`" in gl[-1]["prompt"], gl[-1])
+check("... acceptEdits (no shell), JSON, no web search, the work dir and the reference folder", "acceptEdits" in gl[-1]["args"] and "json" in gl[-1]["args"] and "--disable-web-search" in gl[-1]["args"]
+      and str(w) in gl[-1]["args"] and str(HERE) in gl[-1]["args"], gl[-1]["args"])
+check("... the person's own HOME, no key from the server, and the prompt file is removed", gl[-1]["home"] == str(g4.grok_home()) and gl[-1]["env_key"] is None
+      and not list((g4.root / "tmp").glob("grok-*.txt")))
+for mode, exc, why in (("limit", sb.TransientError, "a rate limit"), ("auth", sb.AuthError, "a sign-in problem"), ("fail", RuntimeError, "another failure")):
+    os.environ["FAKE_GROK"] = mode
+    try:
+        sb.run_grok_cli(g4, "x", work("gk-" + mode))
+        check(f"Grok CLI: {why} is told apart", False)
+    except Exception as e:
+        check(f"Grok CLI: {why} is told apart", type(e) is exc, type(e).__name__)
+    if mode == "auth":
+        check("... a refused sign-in is forgotten", not g4.grok_cli_ok())
+        (g4.grok_home() / ".grok").mkdir(parents=True, exist_ok=True)
+        (g4.grok_home() / ".grok" / "auth.json").write_text("{}")
+os.environ.pop("FAKE_GROK")
+g4.update_profile(engines_on=["grok"], engine="grok")
+Path(os.environ["FAKE_GROK_LOG"]).unlink()
+sb.run_llm(g4, "via the cli", work("gk2"), role="clean")
+check("run_llm: Grok with an account sign-in uses the CLI", Path(os.environ["FAKE_GROK_LOG"]).exists())
+g4.grok_forget()
+sb.oa_set_key(g4, "grok", GOOD)
+Path(os.environ["FAKE_GROK_LOG"]).unlink()
+sb.run_llm(g4, "via the key", work("gk3"), role="clean")
+check("... and with only an API key it uses the key loop", not Path(os.environ["FAKE_GROK_LOG"]).exists() and (work("gk3") / "oa_out.txt").exists())
+(g4.grok_home() / ".grok" / "auth.json").write_text("{}")
+g4.update_profile(engines_on=["claude", "grok"], engine="claude")
+os.environ["FAKE_ERROR"] = "429 rate limit"
+w = work("gk4")
+sb.run_llm(g4, "switch to grok", w, role="clean")
+os.environ.pop("FAKE_ERROR")
+check("a Claude limit hands the call to Grok with an account sign-in", (w / "grok_out.txt").exists() and "claude" in g4.engine_cool_get())
+res, err = call(web.grok_logout, g4)
+check("Grok sign-out removes the credentials and keeps the engine only if a key is there", err is None and not g4.grok_cli_ok() and g4.engine_connected("grok"), (res, err))
+
 # ---------------------------------------------------------------- the status
 st = sb.status(sp)["engine"]
 check("the status carries the box: order, per-engine state, the chain", st["switch"]["order"] == list(en.ORDER) and set(st["switch"]["engines"]) == set(en.ORDER)
       and "chain" in st["switch"] and st["switch"]["engines"]["codex"]["allowed"] is False, st["switch"]["order"])
+page = web.INDEX.read_text(encoding="utf-8")
+check("the page has the account sign-in for Gemini and Grok, one shared device-code flow for Codex and Grok", all(x in page for x in (
+    "function showGemini", "function showGrok", "function deviceSignIn", "/api/gemini/code", "/api/grok/login", "/api/grok/status"))
+      and page.count("function deviceSignIn") == 1 and 'deviceSignIn("codex"' in page and 'deviceSignIn("grok"' in page)
 check("the owner may sign in to Codex; the guest may not (closed)", sb.engines_view(main)["engines"]["codex"]["allowed"] is True)
 os.environ.pop("SB_CODEX_OPEN")
 check("by default every person may sign in to Codex", sb.codex_allowed(g2) and sb.codex_allowed(guest))
