@@ -571,6 +571,13 @@ async def api_engine(request: Request):
 MODEL_RE = re.compile(r"^[A-Za-z0-9_.:/\-]{1,120}$")
 
 
+def need_codex(request: Request) -> sb.Space:
+    sp = who(request)
+    if not sb.codex_allowed(sp):
+        raise HTTPException(403, L("Codex через вхід ChatGPT потребує дозволу власника книги (вкладка «Адмін»)", "Codex with a ChatGPT sign-in needs the permission of the book's owner (Admin tab)"))
+    return sp
+
+
 def _need_engine(name: str):
     if name not in sb.en.ORDER:
         raise HTTPException(400, L("невідомий двигун", "unknown engine"))
@@ -590,8 +597,8 @@ async def api_engines(request: Request):
     on = [e for e in sb.en.ORDER if e in on]
     if not on:
         raise HTTPException(400, L("обери хоча б один двигун", "select at least one engine"))
-    if "codex" in on and sp.uid not in sb.admin_uids():
-        raise HTTPException(403, L("Codex через вхід ChatGPT доступний лише власнику книги", "Codex with a ChatGPT sign-in is for the book's owner only"))
+    if "codex" in on and not sb.codex_allowed(sp):
+        raise HTTPException(403, L("Codex через вхід ChatGPT потребує дозволу власника книги (вкладка «Адмін»)", "Codex with a ChatGPT sign-in needs the permission of the book's owner (Admin tab)"))
     missing = [sb.engine_label(e) for e in on if not await run_in_threadpool(sp.engine_connected, e)]
     if missing:
         raise HTTPException(400, L("не підключено: ", "not connected: ") + ", ".join(missing))
@@ -670,7 +677,7 @@ async def api_engine_model(request: Request):
 def codex_login(request: Request):
     """Start the Codex sign-in with a one-time code (`codex login --device-auth`, the unmodified CLI): the owner opens the
     link, enters the code, and Codex stores its own credentials. Owner only (see the note at the engines in sb.py)."""
-    sp = need_admin(request)
+    sp = need_codex(request)
     codex = sb.codex_bin()
     if not codex.exists():
         raise HTTPException(503, L("Codex не встановлений на сервері", "Codex is not installed on the server"))
@@ -700,7 +707,7 @@ def codex_login(request: Request):
 @app.get("/api/codex/status")
 def codex_login_status(request: Request):
     """The sign-in goes on while the process runs; when it ends, the status says if Codex is signed in now."""
-    sp = need_admin(request)
+    sp = need_codex(request)
     with _logins_lock:
         l = _logins.get("codex:" + sp.uid)
     running = bool(l and l["proc"].poll() is None)
@@ -715,7 +722,7 @@ def codex_login_status(request: Request):
 
 @app.post("/api/codex/logout")
 def codex_logout(request: Request):
-    sp = need_admin(request)
+    sp = need_codex(request)
     codex = sb.codex_bin()
     if codex.exists():
         subprocess.run([str(codex), "logout"], env=sp.codex_env(), capture_output=True, timeout=60, stdin=subprocess.DEVNULL)
@@ -1464,7 +1471,7 @@ def api_accounts(request: Request):
     for a in ACC.listing():
         p = sb.read_json(sb.USERS / ("pub-" + a["username"]) / "profile.json", {}) or {}
         accts.append(a | {"engine": p.get("engine") or "claude", "or_paid": p.get("or_paid"),
-                          "or_cap": p.get("or_daily_cap")})
+                          "or_cap": p.get("or_daily_cap"), "codex_ok": bool(p.get("codex_ok"))})
     return {"url": public_url(), "max": MAX_PUBLIC_USERS, "accounts": accts}
 
 
@@ -1558,10 +1565,15 @@ async def api_examples_action(request: Request, subject: str, action: str):
 @app.post("/api/admin/accounts/{name}/{action}")
 def api_account_action(request: Request, name: str, action: str):
     need_admin(request)
-    if not accounts.USERNAME_RE.fullmatch(name) or action not in ("disable", "enable", "logout", "reset"):
+    if not accounts.USERNAME_RE.fullmatch(name) or action not in ("disable", "enable", "logout", "reset", "codex_on", "codex_off"):
         raise HTTPException(400)
     try:
-        if action in ("disable", "enable"):
+        if action in ("codex_on", "codex_off"):            # may this person sign in to Codex with their ChatGPT plan?
+            prof = sb.Space("pub-" + name)
+            if not (sb.USERS / prof.uid / "profile.json").exists():
+                raise accounts.AccountError("unknown")
+            prof.update_profile(codex_ok=True if action == "codex_on" else None)
+        elif action in ("disable", "enable"):
             ACC.set_disabled(name, action == "disable")
         elif action == "logout":
             ACC.logout_everywhere(name)

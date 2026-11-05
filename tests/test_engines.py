@@ -348,9 +348,21 @@ check("models: the list of the provider", err is None and "grok-4.7" in res["mod
 res, err = call(web.api_engine_key_remove, g2, {"engine": "grok"})
 check("key remove: the file is gone and the engine leaves the selection", err is None and not g2.engine_key_file("grok").exists() and "grok" not in g2.engines_on())
 
-# Codex sign-in (owner only)
+# Codex sign-in (the owner, and the people the owner allows)
 res, err = call(web.codex_login, g2)
 check("Codex sign-in: not for a guest", err and err[0] == 403, (res, err))
+check("a guest is not allowed Codex, the owner is", not sb.codex_allowed(g2) and sb.codex_allowed(main))
+web.need_admin = lambda request: request.state.sp
+res, err = call(web.api_account_action, main, None, "two", "codex_on")
+check("the admin allows Codex for an account", err is None and sb.codex_allowed(g2) and sb.engines_view(g2)["engines"]["codex"]["allowed"] is True, (res, err))
+res, err = call(web.api_account_action, main, None, "nobody-here", "codex_on")
+check("... an account that does not exist is a 404", err and err[0] == 404, (res, err))
+res, err = call(web.codex_login_status, g2)
+check("an allowed person may use the Codex sign-in endpoints", err is None and res["loggedIn"] is False, (res, err))
+res, err = call(web.api_account_action, main, None, "two", "codex_off")
+check("the admin takes the permission back", err is None and not sb.codex_allowed(g2))
+res, err = call(web.codex_login_status, g2)
+check("... and the endpoints are closed again", err and err[0] == 403, (res, err))
 os.environ["FAKE_CODEX_LOGIN_SECONDS"] = "1.5"
 res, err = call(web.codex_login, main)
 check("Codex sign-in: the link and the one-time code come back", err is None and res["url"] == "https://auth.example.test/codex/device" and res["code"] == "AB12-CD34", (res, err))

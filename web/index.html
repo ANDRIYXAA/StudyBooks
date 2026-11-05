@@ -1158,9 +1158,13 @@ const D = [
   ["sw.need", "Обери хоча б один двигун", "Select at least one engine"],
   ["codex.intro", "Codex працює з твоєю підпискою ChatGPT: сервер запускає незмінений Codex CLI, ти відкриваєш посилання, вводиш одноразовий код, і Codex сам зберігає вхід (сервер його не читає).",
    "Codex works with your ChatGPT plan: the server runs the unmodified Codex CLI, you open the link, enter the one-time code, and Codex stores the sign-in itself (the server does not read it)."],
-  ["codex.warn", "Лише для власника книги: за умовами OpenAI, застосунок на віддаленому сервері з входом через ChatGPT потребує їхнього дозволу. Для решти людей є ключі Grok, Gemini й OpenRouter.",
-   "For the book's owner only: OpenAI's terms say an app on a remote server that uses ChatGPT sign-in needs their approval. Everybody else can use Grok, Gemini and OpenRouter keys."],
-  ["codex.owner", "Вхід через ChatGPT доступний лише власнику книги.", "A ChatGPT sign-in is available to the book's owner only."],
+  ["codex.warn", "Codex дозволяє власник книги: за умовами OpenAI, застосунок на віддаленому сервері з входом через ChatGPT потребує їхнього дозволу. Для інших людей є ключі Grok, Gemini й OpenRouter.",
+   "The book's owner allows Codex. OpenAI's terms say an app on a remote server that uses ChatGPT sign-in needs their approval. Other people can use Grok, Gemini and OpenRouter keys."],
+  ["codex.owner", "Вхід через ChatGPT потребує дозволу власника книги: попроси його дозволити Codex для твого акаунта у вкладці «Адмін».",
+   "A ChatGPT sign-in needs the permission of the book's owner. Ask the owner to allow Codex for your account on the Admin tab."],
+  ["acc.codexOn", "Дозволити Codex", "Allow Codex"],
+  ["acc.codexOff", "Заборонити Codex", "Deny Codex"],
+  ["acc.codexTag", "Codex дозволено", "Codex allowed"],
   ["codex.missing", "Codex ще не встановлений на сервері.", "Codex is not installed on the server yet."],
   ["codex.start", "Підключити ChatGPT", "Connect ChatGPT"],
   ["codex.step1", "Відкрий посилання", "Open the link"],
@@ -1824,12 +1828,14 @@ function switchBox() {
   return `<div class="card" style="margin:0 0 12px;padding:10px 12px"><strong class="small">${esc(t("sw.h"))}</strong>
     <div class="row wrap" style="gap:4px 16px;margin-top:6px">${W.order.map(n => {
       const e = W.engines[n], dis = !e.connected || (n === "codex" && e.allowed === false);
-      return `<label class="chk" style="margin:0" title="${esc(dis ? t("sw.noConn") : "")}"><input type="checkbox" data-sw="${esc(n)}" ${e.on && !dis ? "checked" : ""} ${dis ? "disabled" : ""}><span>${esc(e.label)}${
-        e.cool ? ` <span class="tag warn">${esc(t("sw.rest", swHM(e.cool)))}</span>` : ""}</span></label>`;
+      return `<span class="swItem" style="display:inline-flex;gap:6px;align-items:center${dis ? ";opacity:.6" : ""}"><input type="checkbox" data-sw="${esc(n)}" ${e.on && !dis ? "checked" : ""} ${dis ? "disabled" : ""} aria-label="${esc(e.label)}">
+        <button type="button" class="swName" data-swtab="${esc(n)}" title="${esc(dis ? t("sw.noConn") : "")}" style="background:none;border:0;padding:2px 0;color:inherit;font:inherit;cursor:pointer;text-decoration:${dis ? "underline dotted" : "underline"};text-underline-offset:3px">${esc(e.label)}</button>${
+        e.cool ? ` <span class="tag warn">${esc(t("sw.rest", swHM(e.cool)))}</span>` : ""}</span>`;
     }).join("")}</div>
     <div class="small muted" style="margin-top:6px">${esc(t("sw.note"))}</div><div class="msg" id="swMsg"></div></div>`;
 }
 function bindSwitch() {
+  document.querySelectorAll("button[data-swtab]").forEach(b => b.onclick = () => { dtab = b.dataset.swtab; renderDlg(); });     // the name opens the tab of the engine: sign in there
   document.querySelectorAll("input[data-sw]").forEach(c => c.onchange = async () => {
     const on = [...document.querySelectorAll("input[data-sw]:checked")].map(x => x.dataset.sw), msg = $("#swMsg");
     if (!on.length) { c.checked = true; msg.textContent = t("sw.need"); msg.className = "msg bad"; return; }
@@ -2881,10 +2887,10 @@ function renderAccounts() {
   setHTML($("#acctUrl"), A.url ? `${esc(t("acc.url"))} <a href="${esc(A.url)}" target="_blank" rel="noopener">${esc(A.url)}</a>` : esc(t("acc.noUrl")));
   const btn = (u, a, key) => `<button class="btn small" onclick="accAct('${esc(u)}','${a}')">${esc(t(key))}</button>`;
   setHTML($("#acctList"), `<div class="muted small" style="margin:8px 0">${esc(t("acc.count", A.accounts.length, A.max))}</div>` +
-    (A.accounts.length ? `<ul class="list">${A.accounts.map(a => `<li><span><strong>${esc(a.username)}</strong>${a.disabled ? ` <span class="tag bad">${esc(t("acc.disabled"))}</span>` : ""}
+    (A.accounts.length ? `<ul class="list">${A.accounts.map(a => `<li><span><strong>${esc(a.username)}</strong>${a.disabled ? ` <span class="tag bad">${esc(t("acc.disabled"))}</span>` : ""}${a.codex_ok ? ` <span class="tag ok">${esc(t("acc.codexTag"))}</span>` : ""}
       <br><span class="muted small">${esc(a.last_login ? t("acc.last") + " " + fmt(a.last_login) : t("acc.never"))} · ${esc(a.engine === "openrouter"
         ? t(a.or_paid ? "acc.orPaid" : a.or_paid === false ? "acc.orFree" : "acc.orUnknown") : t("acc.engClaude"))}</span></span>
-      <span class="row wrap">${btn(a.username, a.disabled ? "enable" : "disable", a.disabled ? "acc.enable" : "acc.disable")}${btn(a.username, "logout", "acc.logout")}${btn(a.username, "reset", "acc.reset")}</span></li>`).join("")}</ul>`
+      <span class="row wrap">${btn(a.username, a.codex_ok ? "codex_off" : "codex_on", a.codex_ok ? "acc.codexOff" : "acc.codexOn")}${btn(a.username, a.disabled ? "enable" : "disable", a.disabled ? "acc.enable" : "acc.disable")}${btn(a.username, "logout", "acc.logout")}${btn(a.username, "reset", "acc.reset")}</span></li>`).join("")}</ul>`
       : `<div class="muted small">${esc(t("acc.none"))}</div>`));
 }
 async function accAct(user, action) {

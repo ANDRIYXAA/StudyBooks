@@ -2186,6 +2186,12 @@ def engine_label(name):
     return en.LABEL.get(name, name)
 
 
+def codex_allowed(sp):
+    """Who may sign in to Codex with a ChatGPT plan: the book's owner, and the people the owner allows on the Admin tab
+    (`codex_ok` in the profile). OpenAI's terms need its approval for an app that offers ChatGPT sign-in to other people."""
+    return sp.uid in admin_uids() or bool(sp.prof().get("codex_ok"))
+
+
 def _oa_error(engine, code, text, headers=None):
     msg = text
     try:
@@ -2395,7 +2401,7 @@ def run_llm(sp, prompt, cwd, add_dirs=(), timeout=2400, need_vision=False, role=
 def engines_view(sp):
     """The state of the box for the page: per engine, selected / connected / resting / model; keys only as a hint."""
     on, cool = sp.engines_on(), sp.engine_cool_get()
-    owner = sp.uid in admin_uids()           # Codex is for the owner: nobody else costs a `codex login status` every two minutes
+    owner = codex_allowed(sp)                # nobody else costs a `codex login status` every two minutes
     out = {}
     for n in en.ORDER:
         d = {"label": engine_label(n), "on": n in on, "connected": sp.engine_connected(n) if (owner or n != "codex" or n in on) else False,
