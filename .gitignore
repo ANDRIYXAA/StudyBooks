@@ -25,3 +25,6 @@ n8n_studybooks.json
 *.tmp
 scratch/
 pagecheck/node_modules/
+
+# local screenshots in the project folder
+/s_original_*.png
