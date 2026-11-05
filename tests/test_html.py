@@ -81,7 +81,7 @@ CODE = "let a = 0;\nfunction draw() { const c = document.getElementById('c').get
        "document.getElementById('s').addEventListener('input', e => { a = +e.target.value; draw(); });\n" \
        "draw();  // the angle slider moves the vector and the plot is redrawn at once, with the numbers below it\n"
 IA = ('<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">'
-      '<title>Vector sum</title><style>body{margin:0}</style></head><body><input id="s" type="range"><canvas id="c"></canvas>'
+      '<title>Vector sum</title><style>body{margin:0}</style></head><body><p>Кут повзунка змінює суму двох векторів на графіку.</p><input id="s" type="range"><canvas id="c"></canvas>'
       f'<script>{CODE}</script></body></html>')
 check("slider + canvas + own script looks interactive", sb.looks_interactive(IA))
 check("a plain lecture page does not", not sb.looks_interactive(PAGE))

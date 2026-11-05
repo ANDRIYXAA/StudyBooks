@@ -102,7 +102,7 @@ calls = [json.loads(l) for l in ARGS.read_text().splitlines()]
 briefs = [a[a.index("--append-system-prompt") + 1] for a in calls if "--append-system-prompt" in a]
 check("every Claude call gets the skill in its system prompt", len(briefs) == len(calls) and all("studybooks-material" in b for b in briefs),
       f"{len(briefs)}/{len(calls)}")
-check("... the transcription pass gets its own section", any("For this task (transcribe)" in b and "Indices and exponents" in b for b in briefs))
+check("... the transcription pass gets its own section", any("For this task (transcribe)" in b and "Transcribe, do not improve" in b for b in briefs))
 check("... the clean pass gets its own section", any("For this task (clean)" in b and "Correct silently" in b for b in briefs))
 
 # --- 2. a friend uploads the SAME lecture: merged into that entry -----------------------------------------------------

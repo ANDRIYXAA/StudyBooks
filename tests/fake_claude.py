@@ -50,6 +50,95 @@ if "composing a set of exam tickets" in prompt:
     if os.environ.get("FAKE_EXAM_SEEN"):       # lets a test read what the prompts said
         with open(os.environ["FAKE_EXAM_SEEN"], "a", encoding="utf-8") as _f:
             _f.write(prompt + "\n=====PROMPT=====\n")
+elif "You are the example editor of a study-book system" in prompt:
+    mode = os.environ.get("FAKE_EXAMPLES", "ok")
+    old = (cwd / "clean.md").read_text(encoding="utf-8")
+    if os.environ.get("FAKE_SEEN"):
+        with open(os.environ["FAKE_SEEN"], "a", encoding="utf-8") as _f:
+            _f.write(prompt + "\n=====\n")
+    figs = re.findall(r"\{\{fig:([A-Za-z0-9_-]+)\}\}", old)
+    if mode == "none":
+        (cwd / "result.json").write_text(json.dumps({"examples": 0}), encoding="utf-8")
+    elif mode == "nofile":
+        pass
+    else:
+        lines = old.split("\n")
+        i0 = next((i for i, l in enumerate(lines) if l.startswith("Example")), None)
+        if i0 is None:
+            (cwd / "result.json").write_text(json.dumps({"examples": 0}), encoding="utf-8")
+        else:
+            j0 = i0 + 1
+            while j0 < len(lines) and lines[j0].strip() != "":
+                j0 += 1
+            block = lines[i0:j0]
+            prob = [block[0]]
+            sol = block[1:]
+            draw_of, fig_part = {}, ""
+            fig_in = [f for f in figs if any("{{fig:" + f + "}}" in l for l in lines)]
+            if "FAKE_DRAW" in os.environ and fig_in and "you MAY redraw" in prompt:
+                (cwd / "draw").mkdir(exist_ok=True)
+                (cwd / "draw" / "d1.svg").write_text(os.environ["FAKE_DRAW"] if os.environ["FAKE_DRAW"] != "good" else
+                    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100"><line x1="10" y1="90" x2="190" y2="90" stroke="#222"/><line x1="10" y1="90" x2="10" y2="10" stroke="#222"/><text x="100" y="60" font-size="14">F1</text></svg>', encoding="utf-8")
+                draw_of = {"d1": fig_in[0]}
+                fig_part = "{{draw:d1}}"
+                lines = [l.replace("{{fig:" + fig_in[0] + "}}", "") for l in lines]
+                block = [l.replace("{{fig:" + fig_in[0] + "}}", "") for l in block]
+                sol = block[1:]
+            elif fig_in:
+                fig_part = "{{fig:" + fig_in[0] + "}}"
+                lines = [l.replace("{{fig:" + fig_in[0] + "}}", "") for l in lines]
+                block = [l.replace("{{fig:" + fig_in[0] + "}}", "") for l in block]
+                sol = block[1:]
+            cont = ["=== EXAMPLE | A worked example ===", "--- PROBLEM ---", block[0]]
+            if fig_part:
+                cont += ["--- FIGURE ---", fig_part]
+            if sol:
+                cont += ["--- SOLUTION ---"] + sol
+            cont += ["--- EXPLANATION ---", "The idea is to apply the rule step by step. Watch the signs.", ]
+            if mode == "check":
+                cont += ["--- CHECK ---", "In the last line the sign of the second term looks wrong."]
+            cont += ["=== END ==="]
+            new = lines[:i0] + cont + lines[j0:]
+            text = "\n".join(new)
+            if mode == "rewrite":
+                text = text.replace("compute the modulus of", "please determine absolute magnitude quantity depicted below, afterwards state numeric answer")
+            if mode == "formula":
+                text = re.sub(r"\$([^$]+)\$", lambda m: "$" + m.group(1) + " + 0$", text, count=1)
+            (cwd / "clean_ex.md").write_text(text, encoding="utf-8")
+            (cwd / "result.json").write_text(json.dumps({"examples": 1, "draw_of": draw_of}), encoding="utf-8")
+elif "You check redrawn diagrams of a study book" in prompt:
+    mode = os.environ.get("FAKE_VERIFY", "ok")
+    ids = re.findall(r"render/(d[0-9]+)\.png", prompt)
+    out = {}
+    for d_ in ids:
+        out[d_] = {"ok": True, "problems": []} if mode == "ok" or (mode == "fixable" and "(cwd_fixed)" in (cwd / "draw" / (d_ + ".svg")).read_text(encoding="utf-8")) \
+            else {"ok": False, "problems": ["the arrow of F2 points down in the original"]}
+    if mode != "silent":
+        (cwd / "verify.json").write_text(json.dumps(out), encoding="utf-8")
+elif "You fix redrawn diagrams of a study book" in prompt:
+    for f in (cwd / "draw").glob("*.svg"):
+        t = f.read_text(encoding="utf-8")
+        f.write_text(t.replace("</svg>", "<!-- (cwd_fixed) --></svg>"), encoding="utf-8")
+elif "You are the link editor of a study-book system" in prompt:
+    mode = os.environ.get("FAKE_LINK", "ok")
+    ask = re.search(r"- Subject chosen by the student: (\S+)", prompt).group(1)
+    ttl = re.search(r"- Page title: (.*)", prompt).group(1).strip()
+    if os.environ.get("FAKE_SEEN"):
+        with open(os.environ["FAKE_SEEN"], "a", encoding="utf-8") as _f:
+            _f.write(prompt + "\n=====\n")
+    res = {"subject": ask if not ask.startswith("(") else "math1", "topic": "complex-numbers", "topic_title": "",
+           "kind": "video" if "youtu" in prompt else "site", "title": (ttl if ttl != "(none)" else "Untitled link") + " - Site",
+           "summary": "A short summary of the link."}
+    if mode == "nosubject":
+        res["subject"] = ""
+    elif mode == "unknown":
+        res["subject"] = "no-such-subject"
+    elif mode == "newtopic":
+        res.update(topic="Fourier Series", topic_title="Fourier series")
+    elif mode == "long":
+        res.update(title="T" * 300, summary="S" * 600, kind="weird")
+    if mode != "nofile":
+        (cwd / "result.json").write_text(json.dumps(res), encoding="utf-8")
 elif "a program that reads it found these problems" in prompt:
     if os.environ.get("FAKE_EXAM_SEEN"):
         with open(os.environ["FAKE_EXAM_SEEN"], "a", encoding="utf-8") as _f:
@@ -258,6 +347,9 @@ elif "A student uploaded an interactive web page" in prompt:
     if mode == "ok" and "wrong formula" in fixed:
         fixed = fixed.replace("wrong formula", "right formula")
         changes.append("corrected a formula")
+    if mode == "ok" and not re.search(r"[А-Яа-яІіЇїЄєҐґ]{20}|(?:[А-Яа-яІіЇїЄєҐґ][^А-Яа-яІіЇїЄєҐґ]*){20}", fixed):      # every page needs Ukrainian and the switch
+        fixed = fixed.replace("</body>", "<p id='uk'>Українська мова сторінки: перемикач EN | УКР.</p></body>")
+        changes.append("added Ukrainian and the language switch")
     pg.write_text(fixed, encoding="utf-8")
     chosen = re.search(r"Subject the student chose: `([a-z0-9-]+)`", prompt)
     (cwd / "result.json").write_text(json.dumps({"subject": chosen.group(1) if chosen else "statics", "topic": "vectors",
@@ -271,7 +363,7 @@ elif "explanation.md" in prompt:
 elif "page.html" in prompt:
     BUG_SCRIPT = "<script>const q = 1; q = 2;</script>"
     (cwd / "page.html").write_text("<!DOCTYPE html><html><head><meta charset='utf-8'><title>t</title></head><body><input id='s' type='range'><canvas id='c'></canvas>"
-                                   + ("<p>x</p>" * 40) + "<script>let a = 0;\n" + "document.getElementById('s').addEventListener('input', e => { a = +e.target.value; });\n" * 6 + "</script>"
+                                   + "<div class='langbar'><button id='en'>EN</button><button id='uk'>УКР</button></div><p id='t'>Українська мова сторінки: перемикач мов.</p>" + ("<p>x</p>" * 40) + "<script>let a = 0;\n" + "document.getElementById('s').addEventListener('input', e => { a = +e.target.value; });\n" * 6 + "</script>"
                                    + (BUG_SCRIPT if os.environ.get("FAKE_NEWPAGE") == "bug" else "") + "</body></html>")
     (cwd / "result.json").write_text(json.dumps({"title": "Complex plane explorer", "topic": "complex-numbers"}))
 # what `claude -p --output-format stream-json --verbose` prints: an init line, events, then the result

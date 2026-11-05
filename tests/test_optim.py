@@ -328,7 +328,7 @@ _n_pages = lambda: len(list((sp.d["interactive"] / "math1").glob("*.html")))
 
 
 def _cut_with_page(sp_, prompt, cwd, *a, **k):
-    (Path(cwd) / "page.html").write_text("<!DOCTYPE html><html><head><meta charset='utf-8'></head><body><input id='s' type='range'><canvas id='c'></canvas><script>let a = 0;\n" + "document.getElementById('s').addEventListener('input', e => { a = +e.target.value; });\n" * 6 + "</script></body></html>", encoding="utf-8")       # a complete, working page: it is filed after the checks
+    (Path(cwd) / "page.html").write_text("<!DOCTYPE html><html><head><meta charset='utf-8'></head><body><p>Кут повзунка змінює суму двох векторів на графіку.</p><input id='s' type='range'><canvas id='c'></canvas><script>let a = 0;\n" + "document.getElementById('s').addEventListener('input', e => { a = +e.target.value; });\n" * 6 + "</script></body></html>", encoding="utf-8")       # a complete, working page: it is filed after the checks
     raise sb.CallTimeout("Claude did not finish within 40 min")
 
 

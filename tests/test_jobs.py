@@ -199,5 +199,40 @@ try:
 except sb.JobError as e:
     check("a bad id is refused", e.code == 404)
 
+# deleting what failed: one file of a step (Admin tab), and what a cancelled run leaves behind
+jid3 = sb.job_add({"title": {"uk": "Три", "en": "Three"}, "runner": "pub-runner",
+                   "steps": [{"kind": "rebuild_subject", "subject": "gamma", "uploads": srcs["beta"]}]})
+sb.jobs_tick()
+q3 = [u["qid"] for u in sb.job_load(jid3)["steps"][0]["uploads"]]
+v3 = next(j for j in sb.jobs_view()["jobs"] if j["id"] == jid3)
+check("view: every upload carries its id for the delete button", [u["qid"] for u in v3["steps"][0]["uploads"]] == q3, v3["steps"][0]["uploads"])
+finish(q3[0], ok=False)
+check("a failed file is in the failed list", (runner.d["failed"] / q3[0]).exists() and any(f["id"] == q3[0] for f in sb.failed_view(runner)))
+try:
+    sb.job_action(jid3, "drop", "s1", "../x")
+    check("drop: an id that is not in the step is refused", False)
+except sb.JobError:
+    check("drop: an id that is not in the step is refused", True)
+sb.job_action(jid3, "drop", "s1", q3[0])
+check("drop: the failed file is gone (files, work, marks)", not (runner.d["failed"] / q3[0]).exists() and not (runner.d["work"] / q3[0]).exists())
+check("drop: the run's log says so", any("deleted from the queue" in l["en"] for l in sb.job_load(jid3)["log"]))
+if len(q3) > 1:
+    sb.job_action(jid3, "drop", "s1", q3[1])
+    check("drop: a waiting file leaves the queue", not (runner.d["inbox"] / q3[1]).exists())
+# a plain failed item (an upload and a request) is deleted by its owner
+fu = runner.d["failed"] / "20261104-000000-abcd"
+fu.mkdir(parents=True)
+sb.write_json(fu / "submission.json", {"id": fu.name, "label": "x", "files": [], "last_error": "boom"})
+fr = runner.d["failed"] / "req-1.json"
+sb.write_json(fr, {"text": "change", "last_error": "boom"})
+check("failed item: the upload is deleted", sb.delete_failed(runner, fu.name)["ok"] and not fu.exists())
+check("failed item: the request is deleted", sb.delete_failed(runner, "req-1.json")["ok"] and not fr.exists())
+check("failed item: an unknown or tricky name is refused", not sb.delete_failed(runner, "nope")["ok"] and not sb.delete_failed(runner, "../x")["ok"])
+fu2 = runner.d["failed"] / "20261104-000001-abcd"
+fu2.mkdir(parents=True)
+sb.write_json(fu2 / "submission.json", {"id": fu2.name, "label": "y", "files": [], "last_error": "boom"})
+sb.job_action(jid3, "cancel")
+check("cancel: the run leaves nothing of its own in the failed list", not any((runner.d["failed"] / u["qid"]).exists() for s in sb.job_load(jid3)["steps"] for u in s["uploads"]))
+
 print("\nALL OK" if not fails else f"\n{len(fails)} FAILED: {fails}")
 sys.exit(1 if fails else 0)

@@ -63,12 +63,17 @@ check("a transcription call gets General + its section", "## General" not in t a
 check("... and not the other sections", "For this task (clean)" not in t and "Correct silently" not in t)
 check("a call without a role gets General only", "Pandoc Markdown" in sb.agent_brief(None) and "For this task" not in sb.agent_brief(None))
 check("the learning call gets no brief (it reads the whole file)", sb.agent_brief("learn") == "")
-check("the brief stays small", len(sb.agent_brief("transcribe")) < 9000, len(sb.agent_brief("transcribe")))
+check("the brief stays small (the owner's rules made the sections longer: the limit follows the caps of the sections)",
+      len(sb.agent_brief("transcribe")) < sb.SKILL_SECTION_MAX["General"] + sb.SKILL_SECTION_DEFAULT_MAX + 1500, len(sb.agent_brief("transcribe")))
 
 # the page skill: the calls that make or change interactive pages get it instead of the material skill
 page_seed = sb.PAGE_SKILL_FILE.read_text(encoding="utf-8")
 check("the page skill is a real skill (frontmatter) and a copy of the material skill's shape", page_seed.startswith("---\nname: studybooks-interactive\ndescription: ")
-      and set(sb.skill_sections(page_seed)) == {"General", "interactive", "ipage", "ipage_edit"}, sorted(sb.skill_sections(page_seed)))
+      and set(sb.skill_sections(page_seed)) == {"General", "Languages", "Order of the pages", "interactive", "ipage", "ipage_edit"}, sorted(sb.skill_sections(page_seed)))
+check("the material skill has a section for links, with the owner's rules", "link" in sb.SKILL_SECTIONS and "## link" in seed
+      and sum("[owner]" in l for l in sb.skill_sections(seed)["link"].splitlines()) == 2)
+check("a link call gets the link section", "For this task (link)" in sb.agent_brief("link") and "NAME OF THE PAGE" in sb.agent_brief("link"))
+check("the role link runs on a cheap model with few turns", sb.ROLE_MODELS.get("link") == "sonnet" and sb.ROLE_TURNS.get("link", 999) <= 15)
 for role in sb.PAGE_ROLES:
     pb = sb.agent_brief(role)
     check(f"role {role} gets the page skill with the house style and its own section",
@@ -88,7 +93,7 @@ sb.run_llm = _real_run_llm
 check("a requested page runs with the page role, an explanation without a role", roles_seen == ["interactive", None], roles_seen)
 for name, bad in [("no frontmatter", seed.split("---", 2)[2]), ("a link", seed + "\nsee https://x.example\n"),
                   ("HTML", seed.replace("## refs", "<script>x</script>\n## refs")), ("a lost section", seed.replace("## fuse", "## fusion")),
-                  ("too long", seed + "x" * sb.SKILL_MAX), ("most thrown away", seed[:900] + "\n## General\nx\n## transcribe\nx\n## refs\nx\n## clean\nx\n## fuse\nx\n")]:
+                  ("too long", seed + "x" * sb.SKILL_MAX), ("most thrown away", seed[:900] + "\n## General\nx\n## transcribe\nx\n## refs\nx\n## clean\nx\n## fuse\nx\n## link\nx\n")]:
     check(f"a skill with {name} is refused", sb.skill_problems(bad, seed) != [])
 owned = seed.replace("## refs\n", "## refs\n\n- [owner] Keep each formula as printed.\n", 1)
 check("an owner line is accepted while it stays", sb.skill_problems(owned, owned) == [], sb.skill_problems(owned, owned))

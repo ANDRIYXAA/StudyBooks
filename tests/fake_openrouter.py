@@ -114,6 +114,9 @@ def script(body):
     return reply()
 
 
+LIVE = {}       # key -> {"used", "limit", "remaining"}: answered by /key as free_model_daily_requests
+
+
 def start(port):
     state = {"flaky": 0, "requests": [], "count": {}}
     ctrl = {}          # model id -> {"mode": "429min"|"429day"|"404"|"403"|"500"|"empty", "after": n successful calls first}
@@ -143,8 +146,11 @@ def start(port):
                 k = self._key()
                 if not k.startswith("sk-or-") or "bad" in k:
                     return self._send(401, {"error": {"code": 401, "message": "No auth credentials found"}})
-                return self._send(200, {"data": {"label": "test key", "limit_remaining": 5.0, "usage": 0.1,
-                                                 "is_free_tier": "freetier" in k and not tier.get("paid")}})
+                data = {"label": "test key", "limit_remaining": 5.0, "usage": 0.1,
+                        "is_free_tier": "freetier" in k and not tier.get("paid")}
+                if k in LIVE:           # what a newer OpenRouter also reports: the free requests of the day
+                    data["free_model_daily_requests"] = dict(LIVE[k])
+                return self._send(200, {"data": data})
             if self.path == "/credits":
                 return self._send(200, {"data": {"total_credits": 0 if "freetier" in self._key() else 10, "total_usage": 0}})
             self._send(404, {})
