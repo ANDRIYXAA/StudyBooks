@@ -12,7 +12,7 @@ Write `page.html`: ONE self-contained file that works offline by double-click.
 - A program checks every page by running it: it loads the page, moves every slider to both ends, picks every option, presses every button and uses the mouse and the keys on plots. Any error thrown in the page fails the work. Before you finish, read your code again for a `const` that is assigned again, a name that is not defined, an element that is `null` because its id changed, and a function that is called before it is defined.
 - The point is to explore: sliders/inputs for the parameters, a live diagram or plot that updates immediately, the key numbers shown with units, a short explanation of what the student sees and what to try ("set α to 0 and watch…").
 - The physics/maths must be correct; verify formulas against the references when they cover it. Show the formula used on the page.
-- English text, no emoji.
+- No emoji. All text in English AND Ukrainian with an `EN | УКР` switch, from the first version: see Languages in the skill `studybooks-interactive`.
 - The look: follow the house style in the skill `studybooks-interactive` (the same colours, fonts and surfaces as the Studybooks site), so every page looks like the site.
 
 Then write `result.json`: `{"title": "<short English title>", "topic": "<topic id from the list below>"}` The title is the label on the page's button, so it must say what the page does in plain words and be at most 70 characters (about 10 words): no filler like "Interactive" or "Explorer" unless it is needed.

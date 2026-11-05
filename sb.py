@@ -29,6 +29,7 @@ Commands (all print one JSON object):
 
 import base64
 import contextvars
+import copy
 import datetime as dt
 import difflib
 import fcntl
@@ -55,6 +56,11 @@ from zoneinfo import ZoneInfo
 
 import yaml
 
+import layoutfit as lf     # picture sizes + text wrapped around figures; does not import sb
+import links as lk         # addresses of videos and sites: checks, safe fetch of the title; does not import sb
+import examples as ex      # example containers of the clean book: format, checks, SVG rules; does not import sb
+import engines as en       # engine names, providers, limit/login classifier, Codex output, handoff note; does not import sb
+
 ROOT = Path(__file__).resolve().parent
 DATA = Path(os.environ.get("SB_DATA", ROOT / "data"))
 USERS = DATA / "users"
@@ -78,6 +84,8 @@ PAGE_ROLES = ("interactive", "ipage", "ipage_edit")
 LEARN = DATA / "learn"            # work dirs of the learning sessions
 SUPERVISOR = STATE / "supervisor.json"
 TYPST = ROOT / "bin" / "typst"
+TYPST_PKGS = ROOT / "typst-packages"     # wrap-it is kept here, so a build never needs the network
+LAYOUT_FIT = os.environ.get("SB_LAYOUT", "1") != "0"   # 0 = no fitting: full-width pictures, no wrapped text
 CLAUDE = Path.home() / ".local" / "bin" / "claude"
 TZ = ZoneInfo("Europe/Berlin")
 
@@ -110,10 +118,10 @@ CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max"]  # `claude --effort`;
 # Cheaper models for the parts of the work that do not need the person's own model. The person's model is the ceiling:
 # who picked haiku never gets sonnet. SB_MODEL_<ROLE> in .env overrides one role. Roles not listed use the own model.
 ROLE_MODELS = {"transcribe": "sonnet", "refs": "haiku", "refmap": "haiku", "digest": "sonnet", "fix": "sonnet",
-               "fuse": "sonnet", "ipage": "sonnet"}
+               "fuse": "sonnet", "ipage": "sonnet", "link": "sonnet", "examples": "sonnet", "verify": "sonnet"}
 MODEL_RANK = {"haiku": 0, "sonnet": 1, "opus": 2, "fable": 3}
 ROLE_TURNS = {"transcribe": 60, "refs": 40, "refmap": 20, "clean": 40, "digest": 30, "fix": 15, "repair": 30,
-              "fuse": 30, "learn": 40, "ipage": 40}
+              "fuse": 30, "learn": 40, "ipage": 40, "link": 12, "examples": 40, "verify": 20}
 FORCED_ROLES = {"learn": "opus"}   # the owner asked for Opus here, whatever model they picked for their own material
 LIMIT_STEPS = (0.70, 0.80, 0.90)   # share of a plan window at which the queue waits for the person's "Continue"
 # Claude Code reports the share of a window only when it warns (an "allowed" event has no number), so the steps above
@@ -123,12 +131,18 @@ INLINE_CHARS = 60000        # text layers up to this size go into the transcript
 SKIP_CLEAN_EN = os.environ.get("SB_SKIP_CLEAN", "1") != "0"   # typed English pages: the transcription is the clean text
 DIGEST_QUIET = int(os.environ.get("SB_DIGEST_QUIET", 1800))   # chapter summaries wait this long after the last upload
 BASE_URL = os.environ.get("SB_BASE_URL", "http://127.0.0.1:8810").rstrip("/")
+N8N_URL = os.environ.get("SB_N8N_URL", "").strip()        # the admin tab links to the n8n editor of the background workflow (set in .env)
+if not re.match(r"https?://[^\s<>\"']+$", N8N_URL):
+    N8N_URL = ""
 
 
 # ---------------------------------------------------------------- language of what people read
 # Every person has a language (uk or en, set from the site's switch). Anything a person may read is written with
 # L(ukrainian, english): the web layer sets the language per request, the worker per person it is working for.
 _LANG = contextvars.ContextVar("studybooks_lang", default="uk")
+YAML_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)         # the C parser (libyaml) when it is there: about 10 times faster
+_SYLLABUS_CACHE = {}                                               # path -> ((mtime, size), parsed syllabus)
+_ENTRIES_MEMO = contextvars.ContextVar("studybooks_entries_memo", default=None)     # per status request: entries_of() once for each subject
 
 
 def set_lang(lang):
@@ -235,7 +249,20 @@ def set_status(**kw):
 
 
 PROGRESS_KEYS = ("cur_item", "cur_members", "cur_chunk", "cur_chunks", "cur_active", "cur_pages", "cur_files", "cur_pass",
-                 "cur_pass_since", "cur_model", "cur_turn")
+                 "cur_pass_since", "cur_model", "cur_turn", "cur_engine", "cur_donor")
+
+
+def working_view(st, sp=None):
+    """Which engine and model the worker is using right now (for the activity labels): nothing when it is idle."""
+    model = st.get("cur_model")
+    # a worker that started before the engine was recorded: OpenRouter ids look like "vendor/model", Claude's like "opus"
+    engine = st.get("cur_engine") or (("openrouter" if "/" in str(model) else "claude") if model else None)
+    if st.get("state") != "busy" or not engine:
+        return None
+    out = {"engine": engine, "model": model}
+    if sp is not None and st.get("current_uid") == sp.uid and st.get("cur_donor"):
+        out["donor"] = st["cur_donor"]          # whose free limit the person's work is using right now (only they are told)
+    return out
 
 
 def clear_progress():
@@ -291,7 +318,16 @@ class Space:
 
     # ---- syllabus
     def load_syllabus(self):
-        return yaml.safe_load(self.syllabus.read_text(encoding="utf-8")) or {"subjects": []}
+        """The syllabus of this person. Parsing the YAML is the slowest step of a status request (about 45 ms each, 20 times
+        a request), so the parsed file is kept until the file changes; every caller gets its own copy, because callers edit it."""
+        f = self.syllabus
+        stt = f.stat()
+        key = (stt.st_mtime_ns, stt.st_size)
+        hit = _SYLLABUS_CACHE.get(str(f))
+        if not hit or hit[0] != key:
+            hit = (key, yaml.load(f.read_text(encoding="utf-8"), Loader=YAML_LOADER) or {"subjects": []})
+            _SYLLABUS_CACHE[str(f)] = hit
+        return copy.deepcopy(hit[1])
 
     def save_syllabus(self, syl):
         tmp = self.syllabus.with_name("syllabus.yaml.tmp")
@@ -361,7 +397,96 @@ class Space:
 
     def engine(self):
         e = self.prof().get("engine")
-        return e if e in ("claude", "openrouter") else "claude"
+        return e if e in en.ORDER else "claude"
+
+    # ---- the "switch between" box: the engines the person selected, in a fixed order
+    def engines_on(self):
+        """The selected engines (the ones that may be used), in the order of the box. Without a selection: just `engine()`."""
+        on = self.prof().get("engines_on")
+        if isinstance(on, list):
+            out = [e for e in en.ORDER if e in on]
+            if out:
+                return out
+        return [self.engine()]
+
+    def engine_key_file(self, name):
+        return self.root / f"{name}.key"
+
+    def engine_key(self, name):
+        try:
+            return self.engine_key_file(name).read_text(encoding="utf-8").strip() or None
+        except OSError:
+            return None
+
+    def engine_model(self, name):
+        if name == "claude":
+            return self.claude_model()
+        if name == "openrouter":
+            return self.or_model()
+        return self.prof().get(f"{name}_model") or (en.PROVIDERS.get(name) or {}).get("model") or ""
+
+    def codex_env(self):
+        env = {k: v for k, v in os.environ.items() if k not in ("OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN")}
+        env["CODEX_HOME"] = str(self.root / "codex")
+        env["BROWSER"] = "true"
+        return env
+
+    def codex_status(self, fresh=False):
+        """{'loggedIn': bool, 'text': ...} from `codex login status` (exit code 0 = signed in), cached for 2 minutes."""
+        cache = self.root / "codex_status.json"
+        c = read_json(cache)
+        if c and not fresh and time.time() - c.get("_t", 0) < 120:
+            return c
+        out = {"loggedIn": False}
+        if codex_bin().exists():
+            try:
+                (self.root / "codex").mkdir(exist_ok=True)
+                p = subprocess.run([str(codex_bin()), "login", "status"], capture_output=True, text=True, timeout=30,
+                                   env=self.codex_env(), stdin=subprocess.DEVNULL)
+                out = {"loggedIn": p.returncode == 0, "text": " ".join((p.stdout or p.stderr or "").split())[:160]}
+            except Exception as e:
+                out = {"loggedIn": False, "error": str(e)[:200]}
+        out["_t"] = time.time()
+        write_json(cache, out)
+        return out
+
+    def forget_codex_status(self):
+        (self.root / "codex_status.json").unlink(missing_ok=True)
+
+    def engine_connected(self, name):
+        """Can this engine work for this person right now (signed in, or a key and a model)? Limits are not looked at."""
+        if name == "claude":
+            return bool(self.claude_status().get("loggedIn") or os.environ.get("SB_CLAUDE"))
+        if name == "openrouter":
+            return bool(self.or_has_key_or_donor() and self.or_model())
+        if name == "codex":
+            return bool(self.codex_status().get("loggedIn"))
+        if name in en.PROVIDERS:
+            return bool(self.engine_key(name) and self.engine_model(name))
+        return False
+
+    def engine_cool_get(self):
+        """{engine: {"until": epoch, "why": str}} of the engines that rest after a limit (an old entry is dropped)."""
+        c = read_json(self.root / "engine_cool.json", {}) or {}
+        now_ = time.time()
+        return {k: v for k, v in c.items() if k in en.ORDER and isinstance(v, dict) and v.get("until", 0) > now_}
+
+    def engine_cool_set(self, name, until, why=""):
+        with STATE_LOCK:
+            c = self.engine_cool_get()
+            c[name] = {"until": float(until), "why": str(why)[:200], "at": now_iso()}
+            write_json(self.root / "engine_cool.json", c)
+
+    def engine_cool_clear(self, name=None):
+        with STATE_LOCK:
+            c = self.engine_cool_get()
+            c.pop(name, None) if name else c.clear()
+            write_json(self.root / "engine_cool.json", c)
+
+    def engine_chain(self):
+        """The selected engines that can work now, in order: connected and not resting after a limit."""
+        cool = self.engine_cool_get()
+        return [e for e in self.engines_on() if e not in cool and self.engine_connected(e)]
 
     def or_key(self):
         try:
@@ -462,14 +587,21 @@ class Space:
         return bool(ids & (set(st.get("cur_members") or []) | {st.get("cur_item"), st.get("current_rid")}))
 
     def engine_ok(self):
-        """Can this person's queue be processed right now?"""
-        if self.engine() == "openrouter":
-            return bool(self.or_key() and self.or_model())
-        return bool(self.claude_status().get("loggedIn") or os.environ.get("SB_CLAUDE"))
+        """Can this person's queue be processed right now? (at least one selected engine is connected)"""
+        return any(self.engine_connected(e) for e in self.engines_on())
+
+    def or_has_key_or_donor(self):
+        """The own key, or a donor who gave this person free requests (only useful with a free model)."""
+        return bool(self.or_key() or (or_free_setting(self.or_model()) and or_donors(self)))
 
     def engine_missing(self):
+        on = self.engines_on()
+        if len(on) > 1:
+            return L("Жоден з вибраних двигунів не підключений", "None of the selected engines is connected")
         if self.engine() == "openrouter":
-            return L("OpenRouter: не задано ключ або модель", "OpenRouter: key or model not set") if not (self.or_key() and self.or_model()) else None
+            return L("OpenRouter: не задано ключ або модель", "OpenRouter: key or model not set") if not (self.or_has_key_or_donor() and self.or_model()) else None
+        if self.engine() in en.ORDER and self.engine() not in ("claude", "openrouter"):
+            return L(f"{engine_label(self.engine())} не підключений", f"{engine_label(self.engine())} is not connected")
         return L("Claude не підключений", "Claude is not connected")
 
 
@@ -824,16 +956,22 @@ def usage_view(sp):
     reset time has passed is dropped: the old number no longer holds). OpenRouter auto-free: requests used today."""
     if sp.engine() == "openrouter":
         if sp.or_model() != OR_AUTO:
-            return {"engine": "openrouter"}
-        a = or_auto_status(sp)
-        return {"engine": "openrouter", "auto": True, "used": a["used_today"], "cap": a["cap"], "until": a["all_until"],
-                "paid": a["paid"]}
-    lim = (read_json(sp.root / "claude_usage.json", {}) or {}).get("limits") or {}
-    now_ = time.time()
-    rows = [{"type": k, "status": v.get("status"), "util": v.get("util"), "resets": v.get("resets"), "overage": v.get("overage"),
-             "seen": v.get("seen")} for k, v in lim.items() if not v.get("resets") or v["resets"] > now_]
-    rows.sort(key=lambda r: USAGE_ORDER.index(r["type"]) if r["type"] in USAGE_ORDER else 99)
-    return {"engine": "claude", "limits": rows[:4]}
+            out = {"engine": "openrouter"}
+        else:
+            a = or_auto_status(sp)
+            out = {"engine": "openrouter", "auto": True, "used": a["used_today"], "cap": a["cap"], "until": a["all_until"],
+                   "paid": a["paid"], "own": bool(sp.or_key())}
+    else:
+        lim = (read_json(sp.root / "claude_usage.json", {}) or {}).get("limits") or {}
+        now_ = time.time()
+        rows = [{"type": k, "status": v.get("status"), "util": v.get("util"), "resets": v.get("resets"), "overage": v.get("overage"),
+                 "seen": v.get("seen")} for k, v in lim.items() if not v.get("resets") or v["resets"] > now_]
+        rows.sort(key=lambda r: USAGE_ORDER.index(r["type"]) if r["type"] in USAGE_ORDER else 99)
+        out = {"engine": "claude", "limits": rows[:4]}
+    dn = donate_usage(sp)          # a person on Claude can still give their OpenRouter limit away
+    if dn:
+        out["donate"] = dn
+    return out
 
 
 def kill_group(p):
@@ -874,29 +1012,11 @@ def run_claude_cli(sp, prompt, cwd, add_dirs=(), timeout=2400, role=None, max_us
     for d in add_dirs:
         cmd += ["--add-dir", str(d)]
     t0 = time.time()
-    set_status(cur_model=model)
+    set_status(cur_model=model, cur_engine="claude", cur_donor=None)
     # own process group, so "Stop" (and the time limit) kill Claude Code together with anything it started
     p = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                          stdin=subprocess.DEVNULL, env=sp.claude_env(), start_new_session=True)
-    beat = time.time()
-    while True:
-        try:
-            stdout, stderr = p.communicate(timeout=2)
-            break
-        except subprocess.TimeoutExpired:
-            if time.time() - beat > 60:         # the worker loop is alive (a hung call is cut by `timeout` below)
-                beat = time.time()
-                set_status()
-            stopped, dropped = sp.paused(), sp.cancelled()
-            if stopped or dropped or time.time() - t0 > timeout:
-                kill_group(p)
-                if dropped:
-                    log(f"[{sp.uid}] claude stopped: the person deleted the item after {time.time() - t0:.0f}s")
-                    raise CancelledItem()
-                if stopped:
-                    log(f"[{sp.uid}] claude stopped by the person after {time.time() - t0:.0f}s")
-                    raise StoppedError()
-                raise CallTimeout(L(f"Claude не вклався в {timeout // 60} хв", f"Claude did not finish within {timeout // 60} min"))
+    stdout, stderr = watch_process(sp, p, timeout, "Claude")
     out, infos = parse_claude_output(stdout)
     note_claude_limits(sp, infos)
     usd = (out or {}).get("total_cost_usd")
@@ -980,6 +1100,109 @@ def _retry_after(headers):
     return max(1.0, delta) if delta < 7 * 86400 else None
 
 
+def begin_item(sp, phase, label, subject=None, rid=None, item=None):
+    """The status line of the worker when it starts one item (a request, a section): what goes on, for whom, since when."""
+    set_status(current=label, current_uid=sp.uid, current_since=now_iso(), current_subject=subject, current_phase=phase, current_rid=rid,
+               **(clear_progress() | {"cur_item": item or rid, "cur_pass": phase, "cur_pass_since": now_iso()}))
+
+
+def agent_system_prompt(tb, add_dirs, brief):
+    """The system message of the file-tool agent loop (OpenRouter, Grok, Gemini): the same words for every provider."""
+    ro = ", ".join(str(Path(d)) for d in add_dirs) or "(none)"
+    return (f"You are an autonomous worker. Your working directory is {tb.cwd}; relative paths start there. Use the "
+            "tools to read the input files (read_file also shows images) and write EVERY output file the task asks "
+            "for with write_file: a file you do not write does not exist. Read-only reference directories you may "
+            f"read and grep: {ro}. Nobody can answer questions, so never ask any: decide and finish. When all "
+            "files are written, end with one short plain-text line." + (f"\n\n{brief}" if brief else ""))
+
+
+def run_tool_calls(tb, calls, msgs):
+    """Run the tool calls of one model answer and add their results to the conversation, in the order of the calls. The
+    pictures the model asked to see (read_file on an image) follow in one user message. -> True when pictures were added."""
+    images = []
+    for call in calls:
+        fn = call.get("function") or {}
+        try:
+            args = json.loads(fn.get("arguments") or "{}")
+        except json.JSONDecodeError:
+            args = None
+        text, img = tb.run(fn.get("name"), args) if args is not None else ("error: arguments were not valid JSON", None)
+        msgs.append({"role": "tool", "tool_call_id": call.get("id"), "content": text})
+        if img is not None:
+            images.append(img)
+    if images:
+        parts = [{"type": "text", "text": "Images requested with read_file, in order: " + ", ".join(i.name for i in images)}]
+        for i in images:
+            parts.append({"type": "image_url", "image_url": {
+                "url": f"data:{IMG_MIME[i.suffix.lower()]};base64," + base64.b64encode(i.read_bytes()).decode()}})
+        msgs.append({"role": "user", "content": parts})
+    return bool(images)
+
+
+def _http_json(url, headers, body, timeout, make_error, name):
+    """One JSON request (GET without a body, else POST). An HTTP error becomes make_error(code, text, headers); a broken
+    answer or an unreachable server is a TransientError that names the service."""
+    req = urllib.request.Request(url, method="GET" if body is None else "POST",
+                                 data=None if body is None else json.dumps(body).encode("utf-8"), headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        raise make_error(e.code, e.read().decode("utf-8", "replace"), e.headers)
+    except json.JSONDecodeError:
+        raise TransientError(L(f"{name} відповів не JSON-ом", f"{name} did not answer with JSON"))
+    except (urllib.error.URLError, OSError) as e:      # includes timeouts and resets
+        raise TransientError(L(f"{name} недоступний: ", f"{name} is unreachable: ") + str(getattr(e, "reason", e))[:150])
+
+
+def unique_stem(title, taken):
+    """`2026-11-05_1130_the-title`; with -2, -3, … while `taken(name)` says the name is used: the same title in the same
+    minute must not replace an earlier file."""
+    stem = base = f"{now():%Y-%m-%d_%H%M}_{slugify(title)}"
+    k = 1
+    while taken(stem):
+        k += 1
+        stem = f"{base}-{k}"
+    return stem
+
+
+def finish_request(sp, rpath, r, work=None, shots=False, **extra):
+    """A request is done: its record moves to requests/done (with done_at and what the caller adds), the request file goes,
+    and so do the pictures that came with it (shots) and the work folder."""
+    r["done_at"] = now_iso()
+    r.update(extra)
+    write_json(sp.d["requests"] / "done" / rpath.name, r)
+    rpath.unlink()
+    if shots:
+        drop_shots(sp, r["id"])
+    if work is not None:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def watch_process(sp, p, timeout, label, input=None):
+    """Wait for a model CLI (Claude Code, Codex) to finish. Every 2 seconds: the heartbeat of the worker, "Stop", a deleted
+    item and the time limit (the whole process group is killed). -> (stdout, stderr)."""
+    t0 = beat = time.time()
+    while True:
+        try:
+            return p.communicate(input=input, timeout=2)
+        except subprocess.TimeoutExpired:
+            input = None                              # the prompt was sent with the first call
+            if time.time() - beat > 60:               # the worker loop is alive (a hung call is cut by `timeout` below)
+                beat = time.time()
+                set_status()
+            stopped, dropped = sp.paused(), sp.cancelled()
+            if stopped or dropped or time.time() - t0 > timeout:
+                kill_group(p)
+                if dropped:
+                    log(f"[{sp.uid}] {label} stopped: the person deleted the item after {time.time() - t0:.0f}s")
+                    raise CancelledItem()
+                if stopped:
+                    log(f"[{sp.uid}] {label} stopped by the person after {time.time() - t0:.0f}s")
+                    raise StoppedError()
+                raise CallTimeout(L(f"{label} не вклався в {timeout // 60} хв", f"{label} did not finish within {timeout // 60} min"))
+
+
 def _or_error(code, text, headers=None):
     msg = text
     try:
@@ -1006,17 +1229,7 @@ def _or_request(path, key=None, body=None, timeout=60):
     headers = {"Content-Type": "application/json", "X-Title": "Studybooks"}
     if key:
         headers["Authorization"] = "Bearer " + key
-    req = urllib.request.Request(OPENROUTER_URL + path, method="GET" if body is None else "POST",
-                                 data=None if body is None else json.dumps(body).encode("utf-8"), headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return json.loads(r.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        raise _or_error(e.code, e.read().decode("utf-8", "replace"), e.headers)
-    except json.JSONDecodeError:
-        raise TransientError(L("OpenRouter відповів не JSON-ом", "OpenRouter did not answer with JSON"))
-    except (urllib.error.URLError, OSError) as e:      # includes timeouts and resets
-        raise TransientError(L("OpenRouter недоступний: ", "OpenRouter is unreachable: ") + str(getattr(e, "reason", e))[:150])
+    return _http_json(OPENROUTER_URL + path, headers, body, timeout, _or_error, "OpenRouter")
 
 
 def _or_chat(key, body, timeout, retry_429=True):
@@ -1164,6 +1377,79 @@ def or_set_key(sp, key):
     return info
 
 
+# ---- what OpenRouter itself says about a key's free requests today (`/key` -> free_model_daily_requests)
+#
+# Our own counter also counts refused requests and knows nothing about other apps that use the key, so the page and the
+# donor choice use OpenRouter's numbers when they are there: used / limit / remaining of the current UTC day. The limit
+# also tells the tier (50 a day, 1000 after credits were bought), so a top-up is noticed within about a minute.
+
+OR_LIVE_EVERY = 60                 # seconds a "live" answer is reused
+_or_live = {}                      # uid -> (fetched at, key hash, answer)
+_or_live_busy = set()
+
+
+def _or_live_fetch(sp, key):
+    day = utc_day()
+    ans = {"day": day}
+    try:
+        d = (_or_request("/key", key, None, 8) or {}).get("data") or {}
+    except Exception:                       # no answer now: the old one (if it is from today) stays
+        return None
+    fm = d.get("free_model_daily_requests")
+    nums = {k: fm.get(k) for k in ("used", "limit", "remaining")} if isinstance(fm, dict) else {}
+    if nums and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in nums.values()):
+        ans.update({k: int(v) for k, v in nums.items()})
+        cap = ans["limit"]
+        with STATE_LOCK:
+            prof = sp.prof()
+            if cap != prof.get("or_daily_cap"):
+                log(f"[{sp.uid}] openrouter: OpenRouter reports {cap} free requests a day (was {prof.get('or_daily_cap')})")
+                sp.update_profile(or_paid=cap > 50, or_daily_cap=cap, or_tier_at=time.time())
+            st = or_state(sp)
+            if ans["remaining"] > 0 and (st.get("all_until") or 0) > time.time() and re.search(r"добов|daily", str(st.get("all_why") or ""), re.I):
+                st.pop("all_until", None)          # parked for the daily limit, but OpenRouter says there is room (a top-up?)
+                st.pop("all_why", None)
+                write_json(sp.root / "or_state.json", st)
+                log(f"[{sp.uid}] openrouter: the daily-limit pause is lifted, OpenRouter shows {ans['remaining']} requests left")
+    return ans
+
+
+def or_live(sp, max_age=OR_LIVE_EVERY, block=True):
+    """{"day", "used", "limit", "remaining"} from OpenRouter for the person's key (an answer of today), or None when it is
+    not known (no key, no answer, an older OpenRouter). block=False never waits for the network: a stale answer is
+    returned at once and a background thread asks again (for status pages)."""
+    key = sp.or_key()
+    if not key:
+        return None
+    kh, day = hash(key), utc_day()
+    hit = _or_live.get(sp.uid)
+    have = hit[2] if hit and hit[1] == kh and hit[2].get("day") == day else None
+    if have is not None and time.time() - hit[0] < max_age:
+        return have if "limit" in have else None
+    if not block:
+        with STATE_LOCK:
+            if sp.uid in _or_live_busy:
+                return have if have and "limit" in have else None
+            _or_live_busy.add(sp.uid)
+
+        def bg():
+            try:
+                ans = _or_live_fetch(sp, key)
+                if ans is not None:
+                    _or_live[sp.uid] = (time.time(), kh, ans)
+            except Exception as e:      # noqa: BLE001
+                log(f"[{sp.uid}] openrouter live limits failed: {type(e).__name__}: {str(e)[:120]}")
+            finally:
+                _or_live_busy.discard(sp.uid)
+        threading.Thread(target=bg, daemon=True).start()
+        return have if have and "limit" in have else None
+    ans = _or_live_fetch(sp, key)
+    if ans is None:
+        return have if have and "limit" in have else None
+    _or_live[sp.uid] = (time.time(), kh, ans)
+    return ans if "limit" in ans else None
+
+
 # ---- "auto:free": every free model, best first; a model that hits a limit is parked and the next one takes over
 
 def or_param_size(m):
@@ -1288,6 +1574,217 @@ def or_penalize(sp, model, e):
         or_cool(sp, model, e.retry, L("ліміт запитів", "request limit"))
     else:
         or_cool(sp, model, 300, L(f"збій {e.code}", f"failure {e.code}"))
+
+
+# ---- donating free requests: a person with an OpenRouter key may let ONE NAMED other person use it for the free models
+#
+# The donor types a nickname (no list of people is ever shown), picks a daily cap, and can take it back at any time.
+# The donor's key never leaves the server; the recipient's work runs on it only while the recipient's own key is missing
+# or its daily limit of free requests is used up. The donor's own `or_state.json` counts the requests, so the donor's
+# own queue and the donated requests share the donor's daily limit, and `donated.json` counts what each person got.
+
+DONATE_DEFAULT = 100        # requests a day for one recipient, if the donor does not say
+DONATE_MAX = 1000           # the highest cap a donor can set
+DONATE_MAX_PEOPLE = 5       # how many people one donor can name
+DONATE_CACHE_S = 15         # how long "who donates to me" is remembered for status pages (the run loop asks fresh)
+
+
+def or_free_setting(model):
+    """Only free models can be paid for with a donated limit: the donor never pays for a chosen paid model."""
+    return bool(model) and (model == OR_AUTO or str(model).endswith(":free"))
+
+
+def utc_day():
+    return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
+
+
+def donate_id(uid):
+    """An opaque handle for the page (the uid contains an e-mail address for tailnet people)."""
+    return hashlib.sha1(("donate:" + uid).encode("utf-8")).hexdigest()[:12]
+
+
+def uid_by_nick(nick):
+    """The person a donor typed by hand: a public username, or the first name / login of a tailnet person. None when
+    nobody matches, or when two tailnet people have the same name (then the donor cannot name them this way)."""
+    nick = re.sub(r"^@", "", (nick or "").strip().lower())
+    if not nick or len(nick) > 60:
+        return None
+    if re.fullmatch(r"[a-z0-9][a-z0-9_-]{2,29}", nick) and (USERS / ("pub-" + nick) / "profile.json").exists():
+        return "pub-" + nick
+    found = [s.uid for s in spaces() if not s.uid.startswith("pub-") and display_name(s.uid).lower() == nick]
+    return found[0] if len(found) == 1 else None
+
+
+def donated_today(donor, uid):
+    j = read_json(donor.root / "donated.json", {}) or {}
+    return int((j.get("n") or {}).get(uid, 0)) if j.get("day") == utc_day() else 0
+
+
+def donate_note(donor, uid):
+    with STATE_LOCK:
+        j = read_json(donor.root / "donated.json", {}) or {}
+        if j.get("day") != utc_day():
+            j = {"day": utc_day(), "n": {}, "all": j.get("all") or {}}
+        j["n"][uid] = j["n"].get(uid, 0) + 1
+        j.setdefault("all", {})[uid] = j["all"].get(uid, 0) + 1
+        write_json(donor.root / "donated.json", j)
+
+
+_donor_cache = {}
+
+
+def donor_cap(d, cap, block=False):
+    """What the donor really can give: the cap they typed, but never more than OpenRouter's daily limit of their key."""
+    lv = or_live(d, block=block)
+    return min(int(cap), lv["limit"]) if lv else int(cap)
+
+
+def donor_left(d, uid, cap, block=False):
+    """Requests the donor can still give `uid` today: the cap minus what was given, and never more than what OpenRouter
+    says is left on the donor's key (the donor's own work uses the same limit)."""
+    left = int(cap) - donated_today(d, uid)
+    lv = or_live(d, block=block)
+    if lv:
+        left = min(left, lv["remaining"])
+    return max(0, left)
+
+
+def or_donors(sp, cached=True):
+    """People who gave `sp` free requests and still have room today: their key works, their own daily limit is not
+    used up, and the cap they set for `sp` is not reached. The one with the most room first."""
+    hit = _donor_cache.get(sp.uid)
+    if cached and hit and time.time() - hit[0] < DONATE_CACHE_S:
+        return hit[1]
+    now_, found = time.time(), []
+    for d in spaces():
+        if d.uid == sp.uid:
+            continue
+        cap = (d.prof().get("or_donate") or {}).get(sp.uid)
+        if not cap or not d.or_key() or (or_state(d).get("all_until") or 0) > now_:
+            continue
+        left = donor_left(d, sp.uid, cap, block=not cached)
+        if left > 0:
+            found.append((left, d))
+    found.sort(key=lambda x: -x[0])
+    out = [d for _, d in found]
+    _donor_cache[sp.uid] = (time.time(), out)
+    return out
+
+
+_or_busy = {}       # (recipient uid, key owner uid) -> runs that use this key right now (turbo mode spreads the runs)
+
+
+def or_busy_move(slot, sp, owner_uid):
+    """Record that the run `slot` now uses the key of `owner_uid` (None = the run ended)."""
+    with STATE_LOCK:
+        old = slot.get("uid")
+        if old is not None:
+            k = (sp.uid, old)
+            _or_busy[k] = max(0, _or_busy.get(k, 0) - 1)
+            if not _or_busy[k]:
+                _or_busy.pop(k, None)
+        slot["uid"] = owner_uid
+        if owner_uid is not None:
+            _or_busy[(sp.uid, owner_uid)] = _or_busy.get((sp.uid, owner_uid), 0) + 1
+
+
+def or_busy_donors(sp):
+    """First names of the donors whose keys the runs of `sp` use right now."""
+    with STATE_LOCK:
+        return [display_name(u) for (r, u), n in sorted(_or_busy.items()) if r == sp.uid and u != sp.uid and n > 0]
+
+
+def or_source(sp, setting, slot=None):
+    """(the person whose key and daily counters this request uses, donated?). Own key first; a donor only when the own
+    key is missing or its free requests are used up for today, and only for free models.
+    Turbo mode: when the own key AND a donor both have room, the runs are spread over all of these keys (the one with
+    the fewest runs now takes the next one; a tie goes to the own key), so both limits work at the same time.
+    `slot` is the run's own dict: the key it is on stays while it still has room (a run does not change its model every
+    turn), and the choice is written into it under the lock, so two runs that start together do not take the same key."""
+    own_ok = bool(sp.or_key()) and (or_state(sp).get("all_until") or 0) <= time.time()
+    if own_ok and or_free_setting(setting):
+        lv = or_live(sp)                    # OpenRouter says the free requests of today are gone: do not even try
+        own_ok = not (lv and lv["remaining"] <= 0)
+    ds = or_donors(sp, cached=False) if or_free_setting(setting) else []
+    with STATE_LOCK:
+        if not (own_ok and ds and sp.turbo()):
+            best = sp if own_ok else (ds[0] if ds else sp)
+        else:
+            keep = (slot or {}).get("uid")
+            best = next((x for x in [sp] + ds if x.uid == keep), None)
+            if best is None:
+                best = min(enumerate([sp] + ds), key=lambda t: (_or_busy.get((sp.uid, t[1].uid), 0), t[0]))[1]
+        if slot is not None:
+            or_busy_move(slot, sp, best.uid)
+    return best, best.uid != sp.uid
+
+
+def donate_set(sp, uid, cap):
+    with STATE_LOCK:
+        cur = dict(sp.prof().get("or_donate") or {})
+        cur[uid] = int(cap)
+        sp.update_profile(or_donate=cur)
+    _donor_cache.clear()
+
+
+def donate_remove(sp, did):
+    with STATE_LOCK:
+        cur = dict(sp.prof().get("or_donate") or {})
+        gone = [u for u in cur if donate_id(u) == did]
+        for u in gone:
+            cur.pop(u)
+        sp.update_profile(or_donate=cur or None)
+    _donor_cache.clear()
+    return bool(gone)
+
+
+def donate_view(sp):
+    """What the engine dialog shows: who this person gives to (name, cap, used today) and who gives to them."""
+    prof = sp.prof()
+    given = [{"id": donate_id(u), "name": display_name(u), "cap": c, "used": donated_today(sp, u)}
+             for u, c in (prof.get("or_donate") or {}).items()]
+    lv = or_live(sp, block=False)
+    got = [{"name": display_name(d.uid), "left": donor_left(d, sp.uid, (d.prof().get("or_donate") or {}).get(sp.uid, 0))}
+           for d in or_donors(sp)]
+    return {"to": given, "from": got, "max": DONATE_MAX, "default": DONATE_DEFAULT, "people": DONATE_MAX_PEOPLE,
+            "limit": lv["limit"] if lv else None}      # the donor's real daily limit on OpenRouter (50 or 1000), if known
+
+
+_donor_rows_cache = {}
+
+
+def donor_rows(sp, cached=True):
+    """Everybody who gave `sp` free requests (also those with nothing left), with today's numbers. Names only."""
+    hit = _donor_rows_cache.get(sp.uid)
+    if cached and hit and time.time() - hit[0] < DONATE_CACHE_S:
+        return hit[1]
+    now_, rows = time.time(), []
+    for d in spaces():
+        cap = (d.prof().get("or_donate") or {}).get(sp.uid) if d.uid != sp.uid else None
+        if not cap or not d.or_key():
+            continue
+        eff = donor_cap(d, cap)                  # never more than the donor's real daily limit on OpenRouter
+        left = donor_left(d, sp.uid, cap)        # ...and never more than what is really left on the donor's key
+        rows.append({"name": display_name(d.uid), "used": eff - left, "cap": eff, "left": left,
+                     "paused": (or_state(d).get("all_until") or 0) > now_})
+    _donor_rows_cache[sp.uid] = (time.time(), rows)
+    return rows
+
+
+def donate_usage(sp):
+    """For the usage bar: what this person gives (name, used today, cap) and what is given to them (from whom, used,
+    cap), and whether their work runs on a donor's limit now (own key missing or its free requests used up)."""
+    gives = []
+    for u, c in (sp.prof().get("or_donate") or {}).items():
+        cap = donor_cap(sp, c)
+        gives.append({"name": display_name(u), "used": min(donated_today(sp, u), cap), "cap": cap})   # refused requests are counted too: never more than the cap
+    got = donor_rows(sp)
+    if not gives and not got:
+        return None
+    own_ready = bool(sp.or_key()) and (or_state(sp).get("all_until") or 0) <= time.time()
+    using = (sp.engine() == "openrouter" and or_free_setting(sp.or_model()) and not own_ready
+             and any(r["left"] > 0 and not r["paused"] for r in got))
+    return {"gives": gives, "from": got, "using": using}
 
 
 def est_tokens(msgs):
@@ -1515,7 +2012,18 @@ OR_TOOLS = [
 
 
 def run_openrouter(sp, prompt, cwd, add_dirs=(), timeout=2400, need_vision=False, role=None):
-    key, setting = sp.or_key(), sp.or_model()
+    slot = {"uid": None}                      # whose key this run uses now (turbo mode counts the runs per key)
+    try:
+        return _run_openrouter(sp, prompt, cwd, add_dirs, timeout, need_vision, role, slot)
+    finally:
+        or_busy_move(slot, sp, None)
+
+
+def _run_openrouter(sp, prompt, cwd, add_dirs, timeout, need_vision, role, slot):
+    setting = sp.or_model()
+    ow, donated = or_source(sp, setting, slot)      # ow = whose key and daily counters this request uses (a donor's, or the person's own)
+    set_status(cur_donor=", ".join(or_busy_donors(sp)) or None)
+    key = ow.or_key()
     if not key:
         raise AuthError(L("OpenRouter: ключ не задано", "OpenRouter: key not set"))
     if not setting:
@@ -1523,22 +2031,15 @@ def run_openrouter(sp, prompt, cwd, add_dirs=(), timeout=2400, need_vision=False
     auto = setting == OR_AUTO
     info = None if auto else or_model_info(setting, fetch=False)
     tb = ToolBox(cwd, add_dirs, vision=None if (auto or info is None) else info["vision"])
-    ro = ", ".join(str(Path(d)) for d in add_dirs) or "(none)"
-    brief = agent_brief(role)
-    base = [{"role": "system", "content":
-             f"You are an autonomous worker. Your working directory is {tb.cwd}; relative paths start there. Use the "
-             "tools to read the input files (read_file also shows images) and write EVERY output file the task asks "
-             "for with write_file: a file you do not write does not exist. Read-only reference directories you may "
-             f"read and grep: {ro}. Nobody can answer questions, so never ask any: decide and finish. When all "
-             "files are written, end with one short plain-text line." + (f"\n\n{brief}" if brief else "")},
+    base = [{"role": "system", "content": agent_system_prompt(tb, add_dirs, agent_brief(role))},
             {"role": "user", "content": prompt}]
     msgs = list(base)
     t0, cost, tokens, switches, have_images, forbidden, shortened = time.time(), 0.0, 0, [], False, 0, 0
 
     def choose():
-        m = or_pick(sp, need_vision or have_images, est_tokens(msgs))
+        m = or_pick(ow, need_vision or have_images, est_tokens(msgs))
         tb.vision = m["vision"]
-        set_status(cur_model=m["id"])
+        set_status(cur_model=m["id"], cur_engine="openrouter")
         return m["id"]
 
     def switch(model, why):
@@ -1551,7 +2052,7 @@ def run_openrouter(sp, prompt, cwd, add_dirs=(), timeout=2400, need_vision=False
 
     model = choose() if auto else setting
     if not auto:
-        set_status(cur_model=model)
+        set_status(cur_model=model, cur_engine="openrouter")
     for turn in range(1, OR_MAX_TURNS + 1):
         left = timeout - (time.time() - t0)
         if left <= 0:
@@ -1563,10 +2064,21 @@ def run_openrouter(sp, prompt, cwd, add_dirs=(), timeout=2400, need_vision=False
             log(f"[{sp.uid}] openrouter stopped by the person at turn {turn}")
             raise StoppedError()
         set_status(cur_turn=turn)
+        ow2, donated2 = or_source(sp, setting, slot)   # the own limit may have run out (or come back) since the last turn
+        if ow2.uid != ow.uid:
+            ow, donated, key = ow2, donated2, ow2.or_key()
+            set_status(cur_donor=", ".join(or_busy_donors(sp)) or None)
+            log(f"[{sp.uid}] openrouter: now on {'a donor' if donated else 'the own'} key" + (f" of {ow.uid}" if donated else ""))
+            if not key:
+                raise AuthError(L("OpenRouter: ключ не задано", "OpenRouter: key not set"))
+            if auto:
+                model = choose()
         shortened += or_compact(msgs, len(base))
         if auto or model.endswith(":free"):
-            or_throttle(sp)
-            or_note_request(sp)
+            or_throttle(ow)
+            or_note_request(ow)
+            if donated:
+                donate_note(ow, sp.uid)
         try:
             resp = _or_chat(key, {"model": model, "messages": msgs, "tools": OR_TOOLS, "tool_choice": "auto",
                                   "usage": {"include": True}}, min(300, left), retry_429=not auto)
@@ -1578,25 +2090,33 @@ def run_openrouter(sp, prompt, cwd, add_dirs=(), timeout=2400, need_vision=False
             # Three different models refusing in one task points at the key itself: then the queue stops.
             forbidden += 1
             if not auto or forbidden >= 3:
+                if donated:       # the donor's key is the problem, not the person's: park the donor, the next turn picks another source
+                    or_cool_all(ow, time.time() + 3600, "403")
+                    continue
                 raise
             harness = re.search(r"only available|harness", e.detail or "", re.I) is not None
-            or_cool(sp, model, 7 * 86400 if harness else 6 * 3600,
+            or_cool(ow, model, 7 * 86400 if harness else 6 * 3600,
                     L("лише для застосунків зі списку OpenRouter", "only for apps listed by OpenRouter") if harness else "403")
             if harness:         # it will not work for this app: out of the person's list as well, not just parked
-                or_hide(sp, model)
+                or_hide(ow, model)
             model = switch(model, "403")
             continue
         except OrTransient as e:
             if not auto:
                 raise
-            or_penalize(sp, model, e)
+            or_penalize(ow, model, e)
             model = switch(model, f"{e.code}{L(', добовий ліміт', ', daily limit') if e.daily else ''}")
             continue
         except OrModelError as e:
             if not auto:
                 raise
-            or_cool(sp, model, 1800, str(e)[:80])
+            or_cool(ow, model, 1800, str(e)[:80])
             model = switch(model, L("не підходить", "not suitable"))
+            continue
+        except AuthError as e:
+            if not donated:
+                raise
+            or_cool_all(ow, time.time() + 3600, str(e)[:80])     # a donor's key was refused: do not block the recipient for it
             continue
         u = resp.get("usage") or {}
         cost += float(u.get("cost") or 0)
@@ -1616,29 +2136,12 @@ def run_openrouter(sp, prompt, cwd, add_dirs=(), timeout=2400, need_vision=False
                 continue
             log(f"[{sp.uid}] openrouter {model} ok in {time.time() - t0:.0f}s turns={turn} tokens={tokens} "
                 f"cost=${cost:.4f}" + (f" shortened={shortened}" if shortened else "")
-                + (f" switched: {'; '.join(switches)}" if switches else ""))
+                + (f" switched: {'; '.join(switches)}" if switches else "") + (f" donor={ow.uid}" if donated else ""))
             return {"result": msg.get("content") or "", "num_turns": turn, "cost": cost, "model": model,
                     "switches": switches}
         msgs.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": calls,
                      **({"reasoning_details": msg["reasoning_details"]} if msg.get("reasoning_details") else {})})
-        images = []
-        for call in calls:
-            fn = call.get("function") or {}
-            try:
-                args = json.loads(fn.get("arguments") or "{}")
-            except json.JSONDecodeError:
-                args = None
-            text, img = tb.run(fn.get("name"), args) if args is not None else ("error: arguments were not valid JSON", None)
-            msgs.append({"role": "tool", "tool_call_id": call.get("id"), "content": text})
-            if img is not None:
-                images.append(img)
-        if images:
-            have_images = True
-            parts = [{"type": "text", "text": "Images requested with read_file, in order: " + ", ".join(i.name for i in images)}]
-            for i in images:
-                parts.append({"type": "image_url", "image_url": {
-                    "url": f"data:{IMG_MIME[i.suffix.lower()]};base64," + base64.b64encode(i.read_bytes()).decode()}})
-            msgs.append({"role": "user", "content": parts})
+        have_images = run_tool_calls(tb, calls, msgs) or have_images
     raise RuntimeError(L(f"модель не завершила роботу за {OR_MAX_TURNS} кроків", f"the model did not finish within {OR_MAX_TURNS} steps"))
 
 
@@ -1659,17 +2162,254 @@ def run_claude(sp, prompt, cwd, add_dirs, timeout, role, max_usd):
     return run_claude_cli(sp, prompt, cwd, add_dirs, timeout, role, max_usd)
 
 
+# ---------------------------------------------------------------- more engines: Codex, Grok, Gemini, and switching between them
+#
+# The "switch between" box lets a person select any of five engines (claude, openrouter, codex, grok, gemini). The
+# selected ones are used in that order. When one hits its limit (or its login or key fails) it rests (`engine_cool`)
+# and the SAME call continues on the next selected engine: the work directory is the shared memory, and the next engine
+# gets a handoff note that lists what is already written. When the rest is over the first engine is tried again.
+#   codex   the unmodified Codex CLI with the person's own ChatGPT sign-in (CODEX_HOME per person). Only for the book's
+#           owner: OpenAI's docs say a remotely hosted app that uses ChatGPT plan sign-in needs their approval.
+#   grok, gemini   the OpenAI-compatible chat API of xAI and Google with the person's own key (0600 file); the agent loop
+#           is the same file-tool loop as the OpenRouter one.
+
+CODEX = Path.home() / ".local" / "codex-cli" / "node_modules" / ".bin" / "codex"
+OA_TURNS = 120
+OA_MODELS_CACHE_S = 600
+
+
+def codex_bin():
+    return Path(os.environ.get("SB_CODEX", CODEX))
+
+
+def engine_label(name):
+    return en.LABEL.get(name, name)
+
+
+def _oa_error(engine, code, text, headers=None):
+    msg = text
+    try:
+        j = json.loads(text)
+        j = j[0] if isinstance(j, list) and j else j
+        e = j.get("error") if isinstance(j, dict) else None
+        msg = (e.get("message") if isinstance(e, dict) else e) or text
+    except Exception:
+        pass
+    msg = " ".join(str(msg).split())[:300]
+    name = engine_label(engine)
+    retry = _retry_after(headers)
+    if code in (401, 403) or (code == 400 and en.classify(msg) == "auth"):
+        return AuthError(L(f"{name} не прийняв ключ або запит ({code}): {msg}", f"{name} did not accept the key or the request ({code}): {msg}"))
+    if code == 402 or code == 429 or code in (408, 529) or code >= 500 or en.classify(msg) == "limit":
+        hint = f" (retry after {int(retry)} s)" if retry else ""
+        return TransientError(L(f"{name} тимчасово недоступний ({code}): {msg}{hint}", f"{name} is temporarily unavailable ({code}): {msg}{hint}"))
+    return RuntimeError(f"{name} {code}: {msg}")
+
+
+def _oa_request(engine, path, key, body=None, timeout=60):
+    base = os.environ.get(f"SB_{engine.upper()}_URL", en.PROVIDERS[engine]["base"]).rstrip("/")
+    headers = {"Content-Type": "application/json", "Authorization": "Bearer " + key}
+    return _http_json(base + path, headers, body, timeout, lambda code, text, hdrs: _oa_error(engine, code, text, hdrs), engine_label(engine))
+
+
+def oa_models(engine, key):
+    """The model ids of a provider, for the person's choice. Raises AuthError for a key that is refused."""
+    data = (_oa_request(engine, "/models", key, None, 30) or {}).get("data") or []
+    ids = sorted({str(m.get("id") or "").removeprefix("models/") for m in data if isinstance(m, dict) and m.get("id")})
+    return [i for i in ids if i]
+
+
+def oa_set_key(sp, engine, key):
+    """Check a key against the provider (the list of models), store it in a 0600 file. -> the model ids."""
+    if engine not in en.PROVIDERS:
+        raise ValueError(L("невідомий двигун", "unknown engine"))
+    key = (key or "").strip()
+    if not en.KEY_RE.match(key):
+        raise ValueError(L("це не схоже на ключ", "this does not look like a key"))
+    models = oa_models(engine, key)             # AuthError when the provider refuses it
+    f = sp.engine_key_file(engine)
+    fd = os.open(f, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(key)
+    os.chmod(f, 0o600)
+    cur = sp.prof().get(f"{engine}_model")
+    default = en.PROVIDERS[engine]["model"]
+    pick = cur if cur in models else default if default in models else next((m for m in models if "pro" in m), models[0] if models else "")
+    sp.update_profile(**{f"{engine}_model": pick or None})
+    return models
+
+
+def run_oa(sp, engine, prompt, cwd, add_dirs=(), timeout=2400, need_vision=False, role=None):
+    """The agent loop for an OpenAI-compatible API (Grok, Gemini): file tools confined to the work dir, one request per turn."""
+    key, model = sp.engine_key(engine), sp.engine_model(engine)
+    name = engine_label(engine)
+    if not key:
+        raise AuthError(L(f"{name}: ключ не задано", f"{name}: key not set"))
+    if not model:
+        raise AuthError(L(f"{name}: не обрано модель", f"{name}: no model chosen"))
+    tb = ToolBox(cwd, add_dirs, vision=en.PROVIDERS[engine]["vision"])
+    base = [{"role": "system", "content": agent_system_prompt(tb, add_dirs, agent_brief(role))},
+            {"role": "user", "content": prompt}]
+    msgs = list(base)
+    t0, tokens, nudged = time.time(), 0, False
+    set_status(cur_model=model, cur_engine=engine, cur_donor=None)
+    for turn in range(1, OA_TURNS + 1):
+        left = timeout - (time.time() - t0)
+        if left <= 0:
+            raise CallTimeout(L(f"модель не вклалася в {timeout // 60} хв", f"the model did not finish within {timeout // 60} min"))
+        if sp.cancelled():
+            raise CancelledItem()
+        if sp.paused():
+            raise StoppedError()
+        set_status(cur_turn=turn)
+        or_compact(msgs, len(base))
+        resp = None
+        for attempt in range(3):               # a short outage is retried here; a limit goes up to the switching code
+            try:
+                resp = _oa_request(engine, "/chat/completions", key, {"model": model, "messages": msgs, "tools": OR_TOOLS, "tool_choice": "auto"}, min(300, left))
+                break
+            except TransientError:
+                if attempt == 2:
+                    raise
+                time.sleep(OR_RETRY_SLEEP * (attempt + 1))
+        choices = (resp or {}).get("choices") or []
+        if not choices:
+            raise RuntimeError(L(f"{name} не повернув відповіді", f"{name} returned no answer"))
+        tokens += int(((resp.get("usage") or {}).get("total_tokens")) or 0)
+        msg = choices[0].get("message") or {}
+        calls = msg.get("tool_calls") or []
+        if not calls:
+            if choices[0].get("finish_reason") == "length" or tb.writes == 0:
+                if not nudged:                 # one reminder; a model that still writes nothing is an error
+                    nudged = True
+                    msgs.append({"role": "assistant", "content": msg.get("content") or "(no answer)"})
+                    msgs.append({"role": "user", "content": "You have not written any file yet. Use write_file now to write the output files the task asks for."})
+                    continue
+                raise RuntimeError(L(f"модель {name} нічого не записала", f"the {name} model wrote nothing"))
+            log(f"[{sp.uid}] {engine} {model} ok in {time.time() - t0:.0f}s turns={turn} tokens={tokens}")
+            return {"result": msg.get("content") or "", "num_turns": turn, "model": model}
+        msgs.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": calls})
+        run_tool_calls(tb, calls, msgs)
+    raise RuntimeError(L(f"модель не завершила роботу за {OA_TURNS} кроків", f"the model did not finish within {OA_TURNS} steps"))
+
+
+def run_codex(sp, prompt, cwd, add_dirs=(), timeout=2400, need_vision=False, role=None):
+    """The unmodified Codex CLI as this person (their ChatGPT sign-in in CODEX_HOME). `codex exec` writes files in the work
+    dir only (sandbox workspace-write, no network for commands, no approval prompts); the skill goes in front of the prompt."""
+    codex = codex_bin()
+    if not codex.exists():
+        raise AuthError(L("Codex не встановлений на сервері", "Codex is not installed on the server"))
+    brief = agent_brief(role)
+    ro = ", ".join(str(d) for d in add_dirs)
+    text = (brief + "\n\n---\n\n" if brief else "") + prompt + (f"\n\nRead-only reference directories (read them, never write there): {ro}" if ro else "") + \
+        "\n\nNobody can answer questions: never ask any. Write every output file the task asks for in the current directory, then finish with one short line."
+    cmd = [str(codex), "exec", "--json", "--skip-git-repo-check", "--sandbox", "workspace-write", "-C", str(cwd),
+           "-c", 'approval_policy="never"', "-c", "sandbox_workspace_write.network_access=false"]
+    model, eff = sp.engine_model("codex"), sp.prof().get("codex_effort")
+    if model:
+        cmd += ["-m", model]
+    if eff in en.CODEX_EFFORTS:
+        cmd += ["-c", f'model_reasoning_effort="{eff}"']
+    if need_vision:
+        imgs = sorted(p for p in Path(cwd).rglob("*") if p.is_file() and p.suffix.lower() in IMG_MIME)[:8]
+        if imgs:
+            cmd += ["-i", ",".join(str(p) for p in imgs)]
+    cmd.append("-")                                   # the prompt comes on stdin
+    t0 = time.time()
+    set_status(cur_model=model or "codex", cur_engine="codex", cur_donor=None)
+    sp.root.joinpath("codex").mkdir(exist_ok=True)
+    p = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE, text=True,
+                         env=sp.codex_env(), start_new_session=True)
+    stdout, stderr = watch_process(sp, p, timeout, "Codex", input=text)
+    res = en.parse_codex(stdout)
+    if p.returncode != 0 or res["failed"]:
+        detail = res["error"] or " ".join((stderr or "").split())[-400:] or f"exit {p.returncode}"
+        kind = en.classify(detail)
+        if kind == "auth":
+            sp.forget_codex_status()
+            raise AuthError(L("Codex не авторизований: ", "Codex is not signed in: ") + detail[:300])
+        if kind == "limit":
+            raise TransientError(L("Codex тимчасово недоступний: ", "Codex is temporarily unavailable: ") + detail[:300])
+        raise RuntimeError(L("помилка Codex: ", "Codex error: ") + detail[:600])
+    log(f"[{sp.uid}] codex {role or '-'} {model or '-'} ok in {time.time() - t0:.0f}s cwd={cwd} messages={res['messages']} usage={res['usage']}")
+    return {"result": res["text"], "num_turns": res["messages"], "model": model or "codex"}
+
+
+def run_engine(sp, name, prompt, cwd, add_dirs, timeout, need_vision, role, max_usd):
+    if name == "openrouter":
+        return run_openrouter(sp, prompt, cwd, add_dirs, timeout, need_vision, role)
+    if name == "codex":
+        return run_codex(sp, prompt, cwd, add_dirs, timeout, need_vision, role)
+    if name in en.PROVIDERS:
+        return run_oa(sp, name, prompt, cwd, add_dirs, timeout, need_vision, role)
+    return run_claude(sp, prompt, cwd, add_dirs, timeout, role, max_usd)
+
+
+def written_files(cwd):
+    """What is in the work directory now (for the handoff note): relative names with sizes, without the inputs' images."""
+    out = []
+    try:
+        for p in sorted(Path(cwd).rglob("*")):
+            if p.is_file() and not p.name.startswith(".") and p.suffix.lower() not in IMG_MIME:
+                out.append(f"{p.relative_to(cwd).as_posix()} ({p.stat().st_size} bytes)")
+    except OSError:
+        pass
+    return out[:40]
+
+
 def run_llm(sp, prompt, cwd, add_dirs=(), timeout=2400, need_vision=False, role=None, max_usd=None):
-    """Run one agentic task with the engine this person chose. need_vision: the task shows images (OpenRouter auto mode
-    then only uses models that can see). role: see ROLE_MODELS (the model: Claude only; OpenRouter uses the chosen
-    model) and the part of the skill the call gets (both engines). max_usd: Claude Code stops past this cost."""
-    if sp.engine() == "openrouter":
-        r = run_openrouter(sp, prompt, cwd, add_dirs, timeout, need_vision, role)
-    else:
-        r = run_claude(sp, prompt, cwd, add_dirs, timeout, role, max_usd)
-    if sp.prof().get("blocked"):        # the engine works again: a 250-page upload must not say "paused" for hours
-        set_blocked(sp, None)
-    return r
+    """Run one agentic task with the engine(s) this person selected. One engine: as before. Several (the "switch between"
+    box): in order; an engine that hits its limit, or whose login or key fails, rests for a while and the SAME call goes on
+    with the next one, which is told what the work directory already holds. role: see ROLE_MODELS (the model: Claude only)
+    and the part of the skill the call gets. max_usd: Claude Code stops past this cost."""
+    several = len(sp.engines_on()) > 1
+    chain = sp.engine_chain() if several else sp.engines_on()
+    if not chain:
+        cool = sp.engine_cool_get()
+        until = min((v["until"] for v in cool.values()), default=0)
+        when = dt.datetime.fromtimestamp(until, TZ).strftime("%H:%M") if until else "?"
+        raise TransientError(L(f"Усі вибрані двигуни на ліміті або не підключені (найближчий повернеться о {when})",
+                               f"All the selected engines are at their limit or not connected (the first is back at {when})"))
+    tried, last = [], None
+    for name in chain:
+        text = prompt if not tried else prompt + "\n\n" + en.handoff(tried, written_files(cwd))
+        try:
+            r = run_engine(sp, name, text, cwd, add_dirs, timeout, need_vision, role, max_usd)
+        except (TransientError, AuthError) as e:
+            if not several:
+                raise
+            until = time.time() + en.cool_seconds(str(e))
+            sp.engine_cool_set(name, until, str(e))
+            log(f"[{sp.uid}] {name} rests until {dt.datetime.fromtimestamp(until, TZ):%H:%M} ({type(e).__name__}): {str(e)[:160]}")
+            tried.append(name)
+            last = e
+            continue
+        if tried:
+            log(f"[{sp.uid}] the call went on with {name} after {', '.join(tried)}")
+        if sp.prof().get("blocked"):        # the engine works again: a 250-page upload must not say "paused" for hours
+            set_blocked(sp, None)
+        return r
+    raise TransientError(L("Усі вибрані двигуни на ліміті: ", "All the selected engines are at their limit: ") + str(last)[:200])
+
+
+def engines_view(sp):
+    """The state of the box for the page: per engine, selected / connected / resting / model; keys only as a hint."""
+    on, cool = sp.engines_on(), sp.engine_cool_get()
+    owner = sp.uid in admin_uids()           # Codex is for the owner: nobody else costs a `codex login status` every two minutes
+    out = {}
+    for n in en.ORDER:
+        d = {"label": engine_label(n), "on": n in on, "connected": sp.engine_connected(n) if (owner or n != "codex" or n in on) else False,
+             "model": sp.engine_model(n) or None,
+             "cool": cool[n]["until"] if n in cool else None, "why": cool[n]["why"] if n in cool else None}
+        if n in en.PROVIDERS:
+            k = sp.engine_key(n)
+            d["hasKey"], d["hint"] = bool(k), ("…" + k[-4:]) if k else None
+        if n == "codex":
+            cs = sp.codex_status() if owner else {}
+            d.update(loggedIn=bool(cs.get("loggedIn")), text=cs.get("text"), allowed=owner,
+                     installed=codex_bin().exists(), effort=sp.prof().get("codex_effort") or "")
+        out[n] = d
+    return {"order": list(en.ORDER), "engines": out, "on": on, "chain": sp.engine_chain()}
 
 
 # ---------------------------------------------------------------- the skill: how material is added
@@ -1681,7 +2421,7 @@ def run_llm(sp, prompt, cwd, add_dirs=(), timeout=2400, need_vision=False, role=
 # same rules from the first upload, on Claude Code and OpenRouter alike. Opus rewrites the file from real results
 # (learn_skill); every version is kept and the admin can roll back.
 
-SKILL_SECTIONS = ("General", "transcribe", "refs", "clean", "fuse")
+SKILL_SECTIONS = ("General", "transcribe", "refs", "clean", "fuse", "link", "examples")
 SKILL_MAX = 24000                  # characters of the whole file
 SKILL_SECTION_MAX = {"General": 3000}
 SKILL_SECTION_DEFAULT_MAX = 8000
@@ -1735,7 +2475,7 @@ def agent_brief(role):
     parts = []
     if secs.get("General"):
         parts.append(secs["General"][:PAGE_GENERAL_MAX if page else SKILL_SECTION_MAX["General"]])
-    key = {"repair": None}.get(role, role)
+    key = {"repair": None, "verify": "examples"}.get(role, role)
     if key and key != "General" and secs.get(key):
         parts.append(f"### For this task ({key})\n" + secs[key][:SKILL_SECTION_DEFAULT_MAX])
     ste = (PROMPTS / "ste.md").read_text(encoding="utf-8") if (PROMPTS / "ste.md").exists() else ""
@@ -1824,9 +2564,20 @@ PRELUDE = r"""
   #text(weight: "bold", fill: rgb("#24508f"))[Explanation: #title]
   #v(0.3em)
   #body]
-#let pagephoto(path, label) = block(breakable: false, width: 100%)[
-  #align(center, image(path, width: 100%, height: 21.5cm, fit: "contain"))
+#let pagephoto(path, label, w: 100%) = block(breakable: false, width: 100%, above: 0.9em, below: 0.9em)[
+  #align(center, image(path, width: w))
   #align(center, text(size: 8pt, fill: luma(120), label))]
+#let landphoto(path, label, w) = page(flipped: true, margin: 1.5cm)[
+  #align(center, image(path, width: w))
+  #align(center, text(size: 8pt, fill: luma(120), label))]
+#let examplebox(no, title, problem, figure, solution, explanation, check) = block(width: 100%, radius: 3pt, stroke: 0.8pt + luma(150),
+  breakable: true, above: 1.1em, below: 1.1em)[
+  #block(width: 100%, inset: (x: 10pt, y: 6pt), fill: luma(236), radius: (top: 3pt), sticky: true)[#text(weight: "bold")[Example #no] #h(0.5em) #title]
+  #block(width: 100%, inset: (x: 10pt, y: 8pt), breakable: false)[#problem#if figure != none [#align(center)[#figure]]]
+  #if solution != none [#block(width: 100%, inset: (x: 10pt, y: 8pt), stroke: (top: 0.4pt + luma(190)))[#text(size: 8.5pt, weight: "bold", fill: luma(100))[SOLUTION]#v(0.25em)#solution]]
+  #if explanation != none [#block(width: 100%, inset: (x: 10pt, y: 8pt), fill: rgb("#eef3fb"))[#text(size: 8.5pt, weight: "bold", fill: rgb("#24508f"))[EXPLANATION]#v(0.25em)#explanation]]
+  #if check != none [#block(width: 100%, inset: (x: 10pt, y: 8pt), fill: rgb("#fbf3e6"), radius: (bottom: 3pt))[#text(size: 8.5pt, weight: "bold", fill: rgb("#8f5a00"))[CHECK]#v(0.25em)#check]]
+]
 #let summarybox(body) = block(width: 100%, inset: 12pt, radius: 3pt, fill: rgb("#f3f6ef"),
   stroke: (left: 2.5pt + rgb("#5b8a3c")), breakable: true)[#body]
 #let glossletter(l) = block(above: 1.1em, below: 0.5em, sticky: true, text(size: 13pt, weight: "bold", fill: rgb("#5b8a3c"), l))
@@ -1841,7 +2592,8 @@ def typst_str(s):
 
 
 def typst_compile(root, src_typ, out_pdf):
-    p = subprocess.run([str(TYPST), "compile", "--root", str(root), str(src_typ), str(out_pdf)],
+    p = subprocess.run([str(TYPST), "compile", "--package-cache-path", str(TYPST_PKGS), "--root", str(root),
+                        str(src_typ), str(out_pdf)],
                        capture_output=True, text=True, timeout=600)
     if p.returncode != 0:
         raise ValueError(p.stderr[-1500:])
@@ -3019,7 +3771,12 @@ def day_short(day):
 
 
 def entries_of(sp, subject, topic=None):
-    """Entries of a subject in book order: by the date of the class, then by upload."""
+    """Entries of a subject in book order: by the date of the class, then by upload. Inside one status request the
+    answer is read from the disk once for each subject (the page order, the links and the chapters all ask for it)."""
+    memo = _ENTRIES_MEMO.get()
+    key = (sp.uid, subject, topic)
+    if memo is not None and key in memo:
+        return list(memo[key])
     out = []
     for meta in (sp.d["library"] / subject).glob("*/*/meta.json"):
         if meta.parent.name.startswith("_") or meta.parent.parent.name.startswith("_"):
@@ -3029,7 +3786,10 @@ def entries_of(sp, subject, topic=None):
             m["dir"] = meta.parent
             m["date"] = entry_date(m)
             out.append(m)
-    return sorted(out, key=lambda m: (m["date"], m["added"], m.get("order", 0)))
+    out = sorted(out, key=lambda m: (m["date"], m["added"], m.get("order", 0)))
+    if memo is not None:
+        memo[key] = out
+    return list(out)
 
 
 def same_day_brief(sp, sub):
@@ -3084,8 +3844,261 @@ def shared_target(sp):
     return sp if m is None or m.uid == sp.uid else m
 
 
+# ---- links (videos and sites): the person gives an address, the system files it where it belongs in the book
+
+LINK_MAX_PER_SUBJECT = 300
+LINK_BATCH = 10                    # addresses in one send
+LINK_WAITING_MAX = 20              # link requests one person may have in the queue
+LINK_TITLE_MAX = 100
+LINK_SUMMARY_MAX = 200
+
+
+THUMB_W, THUMB_H = 320, 180
+THUMB_PIXELS = 25_000_000          # a picture with more pixels is refused (a decompression bomb)
+
+
+def make_thumb(data):
+    """Any web picture -> a small JPEG (at most 320 x 180, a few KB), or None when it is not a real, sane picture.
+    The picture is decoded and written again, so nothing hidden in the original file is kept."""
+    try:
+        import io
+        from PIL import Image, ImageOps
+        Image.MAX_IMAGE_PIXELS = THUMB_PIXELS
+        im = Image.open(io.BytesIO(data))
+        if im.format not in ("JPEG", "PNG", "WEBP", "GIF") or im.width * im.height > THUMB_PIXELS or min(im.size) < 16:
+            return None
+        im.draft("RGB", (THUMB_W * 2, THUMB_H * 2))
+        im = ImageOps.exif_transpose(im)
+        if im.mode != "RGB":
+            rgba = im.convert("RGBA")
+            bg = Image.new("RGB", im.size, "white")
+            bg.paste(rgba, mask=rgba.split()[-1])
+            im = bg
+        im = ImageOps.fit(im, (THUMB_W, THUMB_H), Image.LANCZOS)
+        out = io.BytesIO()
+        im.save(out, "JPEG", quality=78, optimize=True)
+        return out.getvalue()
+    except Exception:
+        return None
+
+
+def link_thumb(image_url):
+    """The thumbnail of a link: the picture the page names (og:image, a video's poster), safe-fetched and shrunk."""
+    data = lk.fetch_image(image_url) if image_url else None
+    return make_thumb(data) if data else None
+
+
+def links_dir(lib, subject):
+    return lib.d["library"] / subject / "_links"
+
+
+def links_of(sp, subject):
+    """The links of one subject in the order of the study material (see page_order), each with its chapter `day`.
+    (`by` is the raw uid: the web layer turns it into `mine`.)"""
+    key = page_order(sp, subject)
+    s = find_subject(sp.load_syllabus(), subject) or {"topics": []}
+    topic_title = {t["id"]: t["title"] for t in s["topics"]}
+    out = []
+    for f in links_dir(sp, subject).glob("*.json"):
+        m = read_json(f, {}) or {}
+        if not m.get("url"):
+            continue
+        k = key(m)
+        out.append((k + (f.stem,), {"id": f.stem, "url": m["url"], "title": m.get("title") or lk.host_of(m["url"]),
+                                    "summary": m.get("summary") or "", "kind": m.get("kind") or "site",
+                                    "host": lk.host_of(m["url"]), "topic": m.get("topic"),
+                                    "topic_title": topic_title.get(m.get("topic"), m.get("topic_title") or m.get("topic")),
+                                    "day": k[0], "added": m.get("added"), "by": m.get("by"), "book": m.get("book", True),
+                                    "thumb": f"/api/link/thumb/{subject}/{f.stem}" if f.with_suffix(".jpg").exists() else ""}))
+    out.sort(key=lambda x: x[0])
+    return [v for _, v in out]
+
+
+def known_link(lib, url):
+    """-> (subject, id) of the link in the book that has this address, else None."""
+    for s in lib.load_syllabus()["subjects"]:
+        for f in links_dir(lib, s["id"]).glob("*.json"):
+            if (read_json(f, {}) or {}).get("url") == url:
+                return s["id"], f.stem
+    return None
+
+
+def delete_link(lib, subject, lid):
+    """Remove one link of the book. -> the stored record, or None when there is no such link."""
+    if not (SAFE_ID.match(subject or "") and SAFE_ID.match(lid or "")) or ".." in subject + lid:
+        return None
+    f = links_dir(lib, subject) / f"{lid}.json"
+    m = read_json(f, None)
+    if not m:
+        return None
+    f.unlink()
+    f.with_suffix(".jpg").unlink(missing_ok=True)
+    lib.mark_dirty(subject)
+    lib.git_commit(f"link {subject}: removed {m.get('title', lid)[:60]}")
+    return m
+
+
+def link_index(sp, syl, subjects):
+    """What the books hold now, one line each: the model uses it to find the class a link belongs to."""
+    lines = []
+    for sid in subjects:
+        for m in entries_of(sp, sid):
+            if not m.get("asis") or m.get("title"):
+                lines.append(f"- {sid}/{m['topic']}: \"{m['title']}\" (class of {m['date']})")
+    return "\n".join(lines[:80]) or "(nothing yet)"
+
+
+def store_link(sp, tgt, subj, url, title, summary, kind, topic, topic_title, note, info, thumb, in_book):
+    """Write one link of the shared book (the record and its thumbnail). in_book=False: it is in the list under the book
+    but not yet in the PDF book (no model has placed it). The caller saves the syllabus when it made a topic."""
+    d = links_dir(tgt, subj)
+    d.mkdir(parents=True, exist_ok=True)
+    lid = unique_stem(title, lambda n: (d / f"{n}.json").exists())
+    if thumb:
+        tmp = d / f"{lid}.jpg.sbtmp"
+        tmp.write_bytes(thumb)
+        tmp.replace(d / f"{lid}.jpg")
+    write_json(d / f"{lid}.json", {"url": url, "title": title, "summary": summary, "kind": kind, "topic": topic,
+                                   "topic_title": topic_title, "note": note[:300], "added": now_iso(), "read": info["ok"],
+                                   "thumb": bool(thumb), "book": in_book}
+               | ({"by": sp.uid} if tgt is not sp else {}))
+    if in_book:
+        tgt.mark_dirty(subj)
+    return lid
+
+
+def read_link_full(url, full=""):
+    """Code only, no model: the page data and the thumbnail bytes of one address. A short address that is not found but
+    whose full address is found makes the full one the address of the link (`info["url"]`)."""
+    info = lk.fetch_meta(url)
+    if not info["ok"] and full and full != url:
+        alt = lk.fetch_meta(full)
+        if alt["ok"]:
+            url, info = full, alt
+    info["url"] = url
+    info["thumb_bytes"] = link_thumb(info.get("image"))
+    return info
+
+
+def read_links(pairs, deadline=25):
+    """read_link_full for several (short, full) addresses at once (the person waits for it); an address that is too slow
+    gets an empty answer."""
+    from concurrent.futures import wait
+    ex = ThreadPoolExecutor(max_workers=5)
+    futs = [ex.submit(read_link_full, u, f) for u, f in pairs]
+    wait(futs, timeout=deadline)
+    out = [(f.result() if f.done() and not f.exception() else
+            {"ok": False, "title": "", "description": "", "site": "", "kind": lk.kind_of(u), "error": "timeout", "image": "",
+             "thumb_bytes": None, "url": u}) for f, (u, _) in zip(futs, pairs)]
+    ex.shutdown(wait=False, cancel_futures=True)
+    return out
+
+
+def add_link_plain(sp, lib, subject, info):
+    """A link straight into the list under the book, without a model: the title is the name of the page (the site name
+    cut off), the summary is the description the page gives, no topic. It is NOT in the PDF book until a model places it
+    (the request that goes with it, see process_link). -> the id, or None when the address is in the book already."""
+    url = info["url"]
+    syl = lib.load_syllabus()
+    if not find_subject(syl, subject):
+        raise PermanentError(L(f"немає предмета {subject}", f"no such subject {subject}"))
+    if known_link(lib, url):
+        return None
+    if len(list(links_dir(lib, subject).glob("*.json"))) >= LINK_MAX_PER_SUBJECT:
+        raise PermanentError(L(f"у предметі вже {LINK_MAX_PER_SUBJECT} посилань: видали зайві", f"the subject already has {LINK_MAX_PER_SUBJECT} links: delete some"))
+    title = page_title(lk.strip_site(info["title"], info["site"], lk.host_of(url)) or lk.short(url), LINK_TITLE_MAX)
+    lid = store_link(sp, lib, subject, url, title, lk.clean_text(info["description"], LINK_SUMMARY_MAX), info["kind"], "", "", "",
+                     info, info.get("thumb_bytes"), False)
+    lib.git_commit(f"link {subject}: {title} (list only, waits for the model)")
+    return lid
+
+
+def process_link(sp, rpath):
+    """One link on the person's request. Code reads the title of the page (safe fetch, no model); the model picks the
+    subject and the topic (and a short summary); code checks the answer and files the link. The chapter of the book is
+    then the one of its topic, like for interactive pages."""
+    r = read_json(rpath)
+    rid, url, want = r["id"], r["url"], str(r.get("subject") or "")
+    begin_item(sp, "link", L("посилання", "link") + f": {url[:60]}", want or None, rid)
+    tgt = shared_target(sp)
+    syl = tgt.load_syllabus()
+    if want and not find_subject(syl, want):
+        raise PermanentError(L(f"немає предмета {want}", f"no such subject {want}"))
+
+    def finish(note=None):
+        finish_request(sp, rpath, r, work=sp.d["work"] / rid, **({"note_done": note} if note else {}))
+
+    lid0 = str(r.get("link_id") or "")           # the link is in the list already (added without the model): this run places it
+    old_f = links_dir(tgt, want) / f"{lid0}.json" if lid0 and want and SAFE_ID.match(lid0) else None
+    if lid0 and not (old_f and old_f.exists()):
+        log(f"[{sp.uid}] {rid}: the link was removed from the list meanwhile")
+        return finish("removed")
+    dup = known_link(tgt, url)
+    if dup and not (old_f and dup == (want, lid0)):
+        log(f"[{sp.uid}] {rid}: the link is already in the book")
+        return finish("duplicate")
+    info = lk.fetch_meta(url)
+    full = str(r.get("url_full") or "")
+    if not info["ok"] and full and full != url:           # the page cannot be found without its "?…": keep the full address
+        alt = lk.fetch_meta(full)
+        if alt["ok"]:
+            url, info = full, alt
+            if known_link(tgt, url):
+                log(f"[{sp.uid}] {rid}: the link is already in the book")
+                return finish("duplicate")
+    log(f"[{sp.uid}] {rid}: page read: ok={info['ok']} title={info['title'][:50]!r} {info['error']}")
+    if info["title"]:                                      # the queue shows the name of the page, not the address
+        r["label"] = r["title"] = info["title"][:80]
+        write_json(rpath, r)
+    subjects = [want] if want else [s["id"] for s in syl["subjects"]]
+    work = sp.d["work"] / rid
+    shutil.rmtree(work, ignore_errors=True)
+    work.mkdir(parents=True)
+    note = str(r.get("text") or "").strip()
+    prompt = render_prompt("link.md", url=url, kind_guess=info["kind"], page_title=info["title"] or "(none)",
+                           page_description=info["description"] or "(none)", site=info["site"] or lk.host_of(url),
+                           note=note or "(none)", subject_choice=want or "(none: choose it)",
+                           syllabus=syllabus_brief({"subjects": [s for s in syl["subjects"] if s["id"] in subjects]}),
+                           index=link_index(tgt, syl, subjects))
+    run_llm(sp, prompt, work, role="link")
+    res = read_json(work / "result.json", {}) or {}
+    subj = want or str(res.get("subject") or "")
+    s = find_subject(syl, subj) if subj else None
+    if not s:
+        raise PermanentError(L("не вдалося визначити предмет цього посилання: обери предмет у формі й додай ще раз",
+                               "could not tell which subject this link belongs to: choose the subject in the form and add it again"))
+    if len(list(links_dir(tgt, subj).glob("*.json"))) >= LINK_MAX_PER_SUBJECT:
+        raise PermanentError(L(f"у предметі вже {LINK_MAX_PER_SUBJECT} посилань: видали зайві", f"the subject already has {LINK_MAX_PER_SUBJECT} links: delete some"))
+    tid = str(res.get("topic") or "").strip()
+    topic = tid if any(t["id"] == tid for t in s["topics"]) else slugify(tid, 40) if tid else "general"
+    t = ensure_topic(syl, subj, topic, (lk.clean_text(res.get("topic_title"), 80) or None))
+    title = page_title(lk.clean_text(res.get("title"), LINK_TITLE_MAX) or info["title"] or lk.host_of(url), LINK_TITLE_MAX)
+    summary = lk.clean_text(res.get("summary"), LINK_SUMMARY_MAX)
+    kind = res.get("kind") if res.get("kind") in ("video", "site") else info["kind"]
+    if old_f is not None:                       # the model's answer replaces what the program wrote: the link enters the book
+        old = read_json(old_f, None)
+        if not old:
+            return finish("removed")
+        thumb = None if old.get("thumb") else link_thumb(info.get("image"))
+        if thumb:
+            tmp = old_f.with_suffix(".jpg.sbtmp")
+            tmp.write_bytes(thumb)
+            tmp.replace(old_f.with_suffix(".jpg"))
+        write_json(old_f, old | {"title": title, "summary": summary or old.get("summary", ""), "kind": kind, "topic": t["id"],
+                                 "topic_title": t["title"], "note": note[:300] or old.get("note", ""), "book": True,
+                                 "thumb": bool(old.get("thumb") or thumb), "placed": now_iso()})
+        tgt.mark_dirty(subj)
+    else:
+        store_link(sp, tgt, subj, url, title, summary, kind, t["id"], t["title"], note, info, link_thumb(info.get("image")), True)
+    tgt.save_syllabus(syl)
+    tgt.git_commit(f"link {subj}/{t['id']}: {title}")
+    finish()
+
+
 def process_request(sp, rpath):
     r = read_json(rpath)
+    if r.get("kind") == "link":
+        return process_link(sp, rpath)
     if r.get("kind") == "exam":
         return process_exam(sp, rpath)
     if r.get("kind") == "ipage_edit":
@@ -3095,10 +4108,8 @@ def process_request(sp, rpath):
     if r.get("kind") == "book_edit":
         return process_book_edit(sp, rpath)
     rid, kind, subj = r["id"], r["kind"], r["subject"]
-    set_status(current=L("пояснення" if kind == "explain" else "інтерактивна сторінка",
-                         "explanation" if kind == "explain" else "interactive page") + f": {r['text'][:60]}",
-               current_uid=sp.uid, current_since=now_iso(), current_subject=subj, current_phase=kind, current_rid=rid,
-               **(clear_progress() | {"cur_item": rid, "cur_pass": kind, "cur_pass_since": now_iso()}))
+    begin_item(sp, kind, L("пояснення" if kind == "explain" else "інтерактивна сторінка",
+                    "explanation" if kind == "explain" else "interactive page") + f": {r['text'][:60]}", subj, rid)
     tgt = shared_target(sp)              # the book the page lands in; `sp` keeps the login, limits and work folder
     syl = tgt.load_syllabus()
     s = find_subject(syl, subj)
@@ -3135,11 +4146,8 @@ def process_request(sp, rpath):
     title = res.get("title") or r["text"][:80]
     if kind != "explain":
         title = page_title(title)
-    stamp = base = f"{now():%Y-%m-%d_%H%M}_{slugify(title)}"
-    k = 1
-    while (tgt.d["library"] / subj / topic / "_explain" / stamp).exists() if kind == "explain"             else (tgt.d["interactive"] / subj / f"{stamp}.html").exists():
-        k += 1                                  # the same title in the same minute must not replace the earlier page
-        stamp = f"{base}-{k}"
+    stamp = unique_stem(title, (lambda n: (tgt.d["library"] / subj / topic / "_explain" / n).exists()) if kind == "explain"
+                        else (lambda n: (tgt.d["interactive"] / subj / f"{n}.html").exists()))
     by = {"by": sp.uid} if tgt is not sp else {}      # whose request made a page in the shared book
     if kind == "explain":
         f = work / "explanation.md"
@@ -3161,10 +4169,7 @@ def process_request(sp, rpath):
                                          "request": r["text"], "added": now_iso()} | by)
     tgt.save_syllabus(syl)
     tgt.mark_dirty(subj)
-    r["done_at"] = now_iso()
-    write_json(sp.d["requests"] / "done" / rpath.name, r)
-    rpath.unlink()
-    shutil.rmtree(work, ignore_errors=True)
+    finish_request(sp, rpath, r, work=work)
     tgt.git_commit(f"{kind} {subj}/{topic}: {title}")
 
 
@@ -3296,9 +4301,7 @@ def process_ipage_edit(sp, rpath):
     rules as an uploaded page and keeps the version before as `<stamp>.prev.html` (one step back)."""
     r = read_json(rpath)
     rid, subj, stem = r["id"], r["subject"], r.get("stem") or ""
-    set_status(current=L("зміна сторінки", "page change") + f": {r['text'][:60]}", current_uid=sp.uid, current_since=now_iso(),
-               current_subject=subj, current_phase="ipage_edit", current_rid=rid,
-               **(clear_progress() | {"cur_item": rid, "cur_pass": "ipage_edit", "cur_pass_since": now_iso()}))
+    begin_item(sp, "ipage_edit", L("зміна сторінки", "page change") + f": {r['text'][:60]}", subj, rid)
     tgt = shared_target(sp)
     f, meta = ipage_file(tgt, subj, stem)
     if not f:
@@ -3344,11 +4347,7 @@ def process_ipage_edit(sp, rpath):
             raise PermanentError(L("така сторінка вже є", "this page already exists"))
         if title == meta.get("title"):
             title = page_title(title, TITLE_MAX - 10) + " (changed)"
-        stamp = base = f"{now():%Y-%m-%d_%H%M}_{slugify(title)}"
-        k = 1
-        while (d / f"{stamp}.html").exists():
-            k += 1
-            stamp = f"{base}-{k}"
+        stamp = unique_stem(title, lambda n: (d / f"{n}.html").exists())
         atomic_write(d / f"{stamp}.html", new)
         write_json(d / f"{stamp}.json", {"title": title, "topic": meta.get("topic"), "topic_title": meta.get("topic_title"),
                                          "request": r["text"][:300], "added": now_iso(), "sha": sha_new, "changes": changes,
@@ -3358,11 +4357,7 @@ def process_ipage_edit(sp, rpath):
         atomic_write(f, new)
         log_ = (meta.get("edits") or [])[-9:] + [{"at": now_iso(), "by": sp.uid, "request": r["text"][:300]}]
         write_json(f.with_suffix(".json"), meta | {"title": title, "sha": sha_new, "edited": now_iso(), "changes": changes, "edits": log_})
-    r["done_at"] = now_iso()
-    write_json(sp.d["requests"] / "done" / rpath.name, r)
-    rpath.unlink()
-    drop_shots(sp, rid)
-    shutil.rmtree(work, ignore_errors=True)
+    finish_request(sp, rpath, r, work=work, shots=True)
     tgt.mark_dirty(subj)
     tgt.git_commit(f"interactive {subj}: {title} ({'copied and changed' if copy else 'changed'} on request)")
 
@@ -3435,9 +4430,7 @@ def process_entry_edit(sp, rpath):
     checks it (size, what was removed, links, figures, typesetting) and keeps the old text as `clean.prev.md` (one step back)."""
     r = read_json(rpath)
     rid, subj = r["id"], r["subject"]
-    set_status(current=L("правка книги", "book edit") + f": {r['text'][:60]}", current_uid=sp.uid, current_since=now_iso(),
-               current_subject=subj, current_phase="entry_edit", current_rid=rid,
-               **(clear_progress() | {"cur_item": rid, "cur_pass": "entry_edit", "cur_pass_since": now_iso()}))
+    begin_item(sp, "entry_edit", L("правка книги", "book edit") + f": {r['text'][:60]}", subj, rid)
     tgt = shared_target(sp)
     d, meta = entry_dir(tgt, subj, r.get("topic") or "", r.get("entry") or "")
     if not d:
@@ -3479,10 +4472,7 @@ def process_entry_edit(sp, rpath):
             raise PermanentError(L(f"правку не застосовано: {why[:200]}", f"the edit was not applied: {why[:200]}"))
         changes = [str(c)[:200] for c in (res.get("changes") if isinstance(res.get("changes"), list) else [])][:12]
         write_entry_edit(sp, d, meta, old, new, r["text"], changes)
-        r["done_at"] = now_iso()
-        write_json(sp.d["requests"] / "done" / rpath.name, r)
-        rpath.unlink()
-        drop_shots(sp, rid)
+        finish_request(sp, rpath, r, shots=True)
     finally:
         shutil.rmtree(work, ignore_errors=True)
     tgt.mark_dirty(subj)
@@ -3501,9 +4491,7 @@ def process_book_edit(sp, rpath):
     through the same checks as a one-section edit. Sections that pass are applied, the others stay as they were."""
     r = read_json(rpath)
     rid, subj = r["id"], r["subject"]
-    set_status(current=L("правка книги", "book edit") + f": {r['text'][:60]}", current_uid=sp.uid, current_since=now_iso(),
-               current_subject=subj, current_phase="book_edit", current_rid=rid,
-               **(clear_progress() | {"cur_item": rid, "cur_pass": "book_edit", "cur_pass_since": now_iso()}))
+    begin_item(sp, "book_edit", L("правка книги", "book edit") + f": {r['text'][:60]}", subj, rid)
     tgt = shared_target(sp)
     s = find_subject(tgt.load_syllabus(), subj)
     secs = book_edit_sections(sp, tgt, subj) if s else []
@@ -3556,9 +4544,7 @@ def process_book_edit(sp, rpath):
             d, m = dirs[name]
             write_entry_edit(sp, d, read_json(d / "meta.json"), old[name], new, r["text"], changes, batch=rid)  # `m` carries `dir` and `date` from entries_of
         r |= {"done_at": now_iso(), "changed": [dirs[n][1]["title"] for n in good], "skipped": [dirs[n][1]["title"] for n in bad]}
-        write_json(sp.d["requests"] / "done" / rpath.name, r)
-        rpath.unlink()
-        drop_shots(sp, rid)
+        finish_request(sp, rpath, r, shots=True)
     finally:
         shutil.rmtree(work, ignore_errors=True)
     tgt.mark_dirty(subj)
@@ -3727,9 +4713,32 @@ def page_runtime_problems(html, old=None):
     return list(out)
 
 
+_CYRILLIC = re.compile(r"[А-Яа-яІіЇїЄєҐґ]")
+_STYLE_BLOCK = re.compile(r"<style\b.*?</style>", re.S | re.I)
+
+
+def cyrillic_letters(html):
+    return len(_CYRILLIC.findall(_STYLE_BLOCK.sub("", html)))
+
+
+PAGE_UK_MIN = 20          # Ukrainian letters a page needs to count as having a Ukrainian text
+
+
+def lang_problems(html, old=None):
+    """Every page has English and Ukrainian with a switch. The code can see only the Ukrainian: a new or uploaded page (no `old`)
+    must have it, and an edit must not lose what the page had (a page that never had it is not forced to get it on every edit:
+    the skill asks the model to add it)."""
+    if os.environ.get("SB_PAGE_LANGS", "1") == "0":
+        return []
+    if (old is None or cyrillic_letters(old) >= PAGE_UK_MIN) and cyrillic_letters(html) < PAGE_UK_MIN:
+        return ["the page has no Ukrainian text. Every page has English AND Ukrainian with a switch of two buttons `EN` and `УКР` "
+                "(texts in one object `STRINGS = {en: {...}, uk: {...}}`, one `applyLang()`): see Languages in the skill `studybooks-interactive`"]
+    return []
+
+
 def page_check(html, old=None):
-    """Everything a page must pass before it is filed: the static rules, and (when those pass) a run of the page."""
-    return page_problems(html) or page_runtime_problems(html, old)
+    """Everything a page must pass before it is filed: the static rules, the two languages, and (when those pass) a run of the page."""
+    return page_problems(html) or lang_problems(html, old) or page_runtime_problems(html, old)
 
 
 def page_known(dirpath, *shas):
@@ -3757,11 +4766,7 @@ def add_interactive_html(sp, subject, html, topic="", topic_title="", name="", t
     topic = slugify(topic, 40) if topic.strip() else "general"
     t = ensure_topic(syl, subject, topic, topic_title.strip()[:80] or None)
     title = page_title(title.strip() or html_title(html) or Path(name).stem.replace("_", " ").replace("-", " ")) or "Interactive page"
-    stamp = base = f"{now():%Y-%m-%d_%H%M}_{slugify(title)}"
-    k = 1
-    while (d / f"{stamp}.html").exists():
-        k += 1
-        stamp = f"{base}-{k}"
+    stamp = unique_stem(title, lambda n: (d / f"{n}.html").exists())
     (d / f"{stamp}.html").write_text(html, encoding="utf-8")
     write_json(d / f"{stamp}.json", {"title": title, "topic": topic, "topic_title": t["title"],
                                      "request": L("завантажено", "uploaded"), "added": now_iso(), "uploaded": True,
@@ -4527,6 +5532,34 @@ def cached_typst(sp, md):
     return out
 
 
+def laid_out(sp, typ):
+    """Pictures at the size their detail needs (pictures without text are trimmed first), the text wrapped
+    around the figures. A layout problem never stops a book: on any error the plain Typst is used."""
+    if not LAYOUT_FIT:
+        return typ
+    try:
+        return lf.wrap_figures(lf.size_images(typ, sp.root))
+    except Exception as e:
+        log(f"layout: left as is ({type(e).__name__}: {e})")
+        return typ
+
+
+def page_photo_typ(sp, rel, name, label):
+    """One source page of the original book: in the text flow (two or three per page) or on a landscape page."""
+    if LAYOUT_FIT:
+        try:
+            p = sp.root / (rel + "/pages/" + name).lstrip("/")
+            p2 = lf.trim_copy(p)                       # a page without any text loses its empty margins
+            mode, cm = lf.page_plan(p2)
+            use = "/" + p2.relative_to(sp.root).as_posix()
+            if mode == "land":
+                return f"#landphoto({typst_str(use)}, {typst_str(label)}, {cm}cm)"
+            return f"#pagephoto({typst_str(use)}, {typst_str(label)}, w: {cm}cm)"
+        except Exception as e:
+            log(f"layout: page photo left as is ({type(e).__name__}: {e})")
+    return f"#pagephoto({typst_str(rel + '/pages/' + name)}, {typst_str(label)})"
+
+
 def fmt_date(iso):
     return dt.datetime.fromisoformat(iso).strftime("%d %b %Y, %H:%M")
 
@@ -4545,6 +5578,7 @@ def book_parts(sp, subj):
     for m in entries_of(sp, subj):
         by_day.setdefault(m["date"], []).append(m)
         topic_day[m["topic"]] = max(topic_day.get(m["topic"], ""), m["date"])
+    topic_idx = {t["id"]: i for i, t in enumerate(s["topics"])}
     extras, inter = {}, {}
     for meta in (sp.d["library"] / subj).glob("*/_explain/*/meta.json"):
         m = read_json(meta)
@@ -4554,9 +5588,430 @@ def book_parts(sp, subj):
         m = read_json(meta)
         m["url"] = f"{BASE_URL}/i/{subj}/{meta.stem}.html"
         inter.setdefault(topic_day.get(m["topic"]) or m["added"][:10], []).append(m)
-    days = sorted(set(by_day) | set(extras) | set(inter))
+    links = {}
+    for m in links_of(sp, subj):                 # videos and sites: the chapter of their topic, like interactive pages
+        if m["book"]:                            # a link that no model has placed yet is only in the list under the book
+            links.setdefault(m["day"], []).append(m)
+    days = sorted(set(by_day) | set(extras) | set(inter) | set(links))
     return s, [(d, day_title(d), by_day.get(d, []), sorted(extras.get(d, []), key=lambda m: m["added"]),
-                sorted(inter.get(d, []), key=lambda m: m["added"])) for d in days]
+                sorted(inter.get(d, []), key=lambda m: (topic_idx.get(m["topic"], 10**6), m["added"])), links.get(d, [])) for d in days]
+
+
+# ---------------------------------------------------------------- examples: containers, redrawn diagrams, checks
+#
+# Every worked example of a lecture section becomes a container in the clean book (in its place, in the order of the
+# lecture) with the problem, the figure, the solution, an explanation and, if found, a CHECK of small errors. A diagram
+# may be redrawn as an SVG; a second model call compares the redraw with the photo, and when the redraw does not pass
+# after one fix the book keeps the photo. The text and the formulas of the example are never changed (the owner's rule):
+# the program compares them with `clean.md`. Result: library/<subj>/<topic>/<entry>/examples/{clean_ex.md, draw/, meta.json}.
+# New uploads get it by themselves (when the uploads have stopped); the books of before only through a "run" that the
+# admin starts on the Admin tab (examples_run_*).
+
+EXAMPLES_VERSION = 1               # bump after changing prompts/examples*.md: every section is made again
+EXAMPLES_STATE = STATE / "examples.json"
+EXAMPLES_MIN_CHARS = 300           # a shorter section has no examples worth a container
+EXAMPLES_ROUNDS = 2                # model calls to write the containers: the first, then one repair
+EXAMPLES_DRAW_ROUNDS = 2           # the check of the redraws: check, fix, check again
+SVG_RULES = """- One file `draw/<id>.svg` with ONE `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 W H">`, W and H at most 700. Only these elements: svg, g, defs, marker, line, polyline, polygon, path, circle, ellipse, rect, text, tspan. No script, no style that loads something, no image, no link, no DOCTYPE, no HTML entities such as `&nbsp;`.
+- Lines: `stroke="#222"`, `stroke-width="1.5"`, `fill="none"` for shapes; arrows with a `<marker>` in `<defs>`. Text: `font-family="sans-serif"`, `font-size` 13 to 15, `fill="#222"`. Write Greek letters, indices and units as Unicode (θ, F₁, Ω).
+- Labels exactly as in the original: the same letters, indices, numbers and units. The same directions of arrows and forces, the same angles, proportions and positions.
+- A graph: axes with arrowheads, axis labels with units, tick marks with the values that the original shows, and the curve as a `<polyline>` of at least 60 points computed from the formula in the range of the original. Mark the special points of the original (zeros, maxima, crossings, asymptotes) in the same places.
+- Add nothing that the original does not show. No title, no frame, no caption: the book adds its own."""
+DRAW_RULES_ON = ("You can see the figure images (listed above). For a diagram, a graph or a sketch that belongs to an example you MAY redraw it "
+                 "as a clean SVG: write `draw/d1.svg` (then `d2`, ...), put `{{draw:d1}}` in the FIGURE part instead of its `{{fig:f1}}` marker, "
+                 "and write in `result.json`: `\"draw_of\": {\"d1\": \"f1\"}`. Redraw only when you are sure that you can reproduce ALL elements; "
+                 "otherwise keep `{{fig:f1}}`. Figures that are not in an example stay as they are. A photo of a handwritten solution is not a "
+                 "diagram: do not redraw it (its text is in the section). A program compares each redraw with the photo and keeps the photo "
+                 "when they differ, so a careless redraw gains nothing.\n\nRules for the SVG:\n\n" + SVG_RULES)
+DRAW_RULES_OFF = "No figure images are available: do not redraw anything, and keep every `{{fig:...}}` marker where it is."
+
+
+def engine_sees(sp):
+    try:
+        require_engine_sees(sp, [{"image": True}])
+        return True
+    except PermanentError:
+        return False
+
+
+def examples_state():
+    st = read_json(EXAMPLES_STATE, None)
+    st = st if isinstance(st, dict) else {}
+    st.setdefault("runs", {})
+    if not st.get("since"):               # sections that were added before this moment are not made by themselves
+        st["since"] = now_iso()
+        write_json(EXAMPLES_STATE, st)
+    return st
+
+
+def examples_source_sha(d):
+    return hashlib.sha1(b"examples v%d\n" % EXAMPLES_VERSION + (d / "clean.md").read_bytes()).hexdigest()
+
+
+def examples_current(d):
+    meta = read_json(d / "examples" / "meta.json", None)
+    return bool(meta) and meta.get("version") == EXAMPLES_VERSION and meta.get("sha") == examples_source_sha(d)
+
+
+def examples_for_book(sp, m):
+    """The text of the section with its containers, when it is there and made from the clean text as it is now."""
+    d = m["dir"]
+    if m.get("asis") or not (d / "clean.md").exists() or not examples_current(d):
+        return None
+    meta = read_json(d / "examples" / "meta.json", {}) or {}
+    f = d / "examples" / "clean_ex.md"
+    return f.read_text(encoding="utf-8") if meta.get("examples") and f.exists() else None
+
+
+def examples_eligible(m, since, run_subjects):
+    d = m["dir"]
+    subj = d.parent.parent.name
+    if m.get("asis") or not (d / "clean.md").exists():
+        return False
+    if (m.get("added") or "") < since and subj not in run_subjects:
+        return False
+    return len((d / "clean.md").read_text(encoding="utf-8", errors="replace")) >= EXAMPLES_MIN_CHARS
+
+
+def examples_failures_file(sp):
+    return sp.root / "examples_failures.json"
+
+
+def stale_examples(sp, since, run_subjects):
+    """[(subject, entry meta, sha)] whose containers are missing or older than the clean text."""
+    fails = read_json(examples_failures_file(sp), {}) or {}
+    out = []
+    for s in sp.load_syllabus()["subjects"]:
+        for m in entries_of(sp, s["id"]):
+            if not examples_eligible(m, since, run_subjects) or examples_current(m["dir"]):
+                continue
+            sha = examples_source_sha(m["dir"])
+            f = fails.get(f"{s['id']}/{m['topic']}/{m['dir'].name}") or {}
+            if f.get("sha") == sha and f.get("attempts", 0) >= MAX_ATTEMPTS:
+                continue
+            out.append((s["id"], m, sha))
+    return out
+
+
+def render_svg_png(work, did):
+    """The picture of a redraw as the book would show it (for the checking model). Raises ValueError."""
+    (work / "render").mkdir(exist_ok=True)
+    src = work / "render" / f"{did}.typ"
+    src.write_text(f'#set page(width: auto, height: auto, margin: 6pt)\n#image("/draw/{did}.svg", width: 14cm)\n', encoding="utf-8")
+    typst_compile(work, src, work / "render" / f"{did}.png")
+
+
+def examples_problems(sp, d, m, old, new, work, res):
+    """English reasons why the model's `clean_ex.md` cannot be used, else []."""
+    try:
+        segs = ex.parse(new)
+    except ex.ExampleError as e:
+        return [str(e)]
+    exs = ex.examples_of(segs)
+    if not exs:
+        return ["`clean_ex.md` has no example container. If the section has no example, write `result.json` with "
+                "`{\"examples\": 0}` and do not write `clean_ex.md`"]
+    out = ex.structure_problems(segs)
+    out += ex.preservation_problems(old, ex.core_text(segs))
+    draw_of = res.get("draw_of") if isinstance(res.get("draw_of"), dict) else {}
+    out += ex.figure_problems(old, new, draw_of)
+    if ex.draw_markers_outside(segs):
+        out.append("a `{{draw:...}}` marker is outside an example container")
+    for did in sorted(set(ex.DRAW_RE.findall(new))):
+        f = work / "draw" / f"{did}.svg"
+        if not f.exists():
+            out.append(f"`{{{{draw:{did}}}}}` has no file `draw/{did}.svg`")
+            continue
+        out += [f"draw/{did}.svg: {p}" for p in ex.svg_problems(f.read_text(encoding="utf-8", errors="replace"))]
+    if not out:                                   # the formulas of the new parts must typeset
+        rel = "/" + str(d.relative_to(sp.root))
+        try:
+            check_md(sp, subst_figs(ex.DRAW_RE.sub("", new_md_for_check(segs)), sp.root, rel + "/figs", m.get("figures")))
+        except ValueError as e:
+            out.append("the text cannot be typeset into the PDF: " + " ".join(str(e).split())[:300])
+    return out[:12]
+
+
+def new_md_for_check(segs):
+    """All the parts of the containers one after the other, without markers: what the typesetting check reads."""
+    parts = []
+    for kind, s in segs:
+        if kind == "text":
+            parts.append(s)
+        else:
+            parts.append("**" + s["title"] + "**")
+            parts += [s["sections"][k] for k in ex.ORDER if s["sections"].get(k)]
+    return "\n\n".join(parts)
+
+
+def verify_drawings(sp, work, subj, new, draw_of):
+    """The redraws are compared with the photos by a second call; one fix for the ones that differ; what still differs goes
+    back to the photo. -> (the text, drawings that stay, drawings given up)."""
+    draws = sorted(set(ex.DRAW_RE.findall(new)))
+    if not draws:
+        return new, [], []
+    good, problems = set(), {x: [] for x in draws}
+    for rnd in range(EXAMPLES_DRAW_ROUNDS):
+        pending = [x for x in draws if x not in good]
+        if not pending:
+            break
+        pairs = []
+        for x in pending:
+            try:
+                render_svg_png(work, x)
+                pairs.append(x)
+            except ValueError as e:
+                problems[x] = ["the SVG does not render: " + " ".join(str(e).split())[:200]]
+        if pairs:
+            (work / "verify.json").unlink(missing_ok=True)
+            listing = "\n".join(f"- `render/{x}.png` <- `figs/{draw_of[x]}.jpg`" for x in pairs)
+            run_llm(sp, render_prompt("examples_verify.md", pairs=listing), work, role="verify", need_vision=True)
+            vj = read_json(work / "verify.json", {}) or {}
+            for x in pairs:
+                v = vj.get(x) if isinstance(vj, dict) else None
+                if isinstance(v, dict) and v.get("ok") is True:
+                    good.add(x)
+                    problems[x] = []
+                else:
+                    pl = v.get("problems") if isinstance(v, dict) and isinstance(v.get("problems"), list) else []
+                    problems[x] = [str(p)[:220] for p in pl][:6] or ["the checker did not confirm that this drawing is the same as the photo"]
+        pending = [x for x in draws if x not in good]
+        if pending and rnd == 0:
+            saved = {x: (work / "draw" / f"{x}.svg").read_bytes() for x in pending}
+            listing = "\n".join(f"- `draw/{x}.svg` (picture `render/{x}.png`, photo `figs/{draw_of[x]}.jpg`):\n" +
+                                "\n".join(f"  - {p}" for p in problems[x]) for x in pending)
+            run_llm(sp, render_prompt("examples_redraw.md", pairs=listing, svg_rules=SVG_RULES), work, role="examples", need_vision=True)
+            for x in pending:
+                f = work / "draw" / f"{x}.svg"
+                if not f.exists() or ex.svg_problems(f.read_text(encoding="utf-8", errors="replace")):
+                    f.write_bytes(saved[x])        # a broken fix is not used: the old drawing is checked again
+    failed = [x for x in draws if x not in good]
+    for x in failed:
+        new = new.replace("{{draw:%s}}" % x, "{{fig:%s}}" % draw_of[x])
+        (work / "draw" / f"{x}.svg").unlink(missing_ok=True)
+    return new, sorted(good), failed
+
+
+def examples_book_typst(sp, m, md, counter):
+    """The section of the clean book with its example containers as Typst. -> (typst, number of containers)."""
+    d = m["dir"]
+    rel = "/" + str(d.relative_to(sp.root))
+
+    def conv(text):
+        text = ex.DRAW_RE.sub(lambda g: (f"\n\n![]({rel}/examples/draw/{g.group(1)}.svg)\n\n"
+                                         if (d / "examples" / "draw" / f"{g.group(1)}.svg").exists() else ""), text)
+        return cached_typst(sp, subst_figs(text, sp.root, rel + "/figs", m.get("figures")))
+
+    out, n = [], counter
+    for kind, s in ex.parse(md):
+        if kind == "text":
+            if s.strip():
+                out.append(laid_out(sp, conv(s.strip("\n"))))
+            continue
+        n += 1
+        sec = s["sections"]
+        part = lambda name: ("[\n" + conv(sec[name].strip()) + "\n]") if sec.get(name, "").strip() else "none"
+        out.append(f"#examplebox({n}, {typst_str(s['title'])}, {part('PROBLEM')}, {part('FIGURE')}, {part('SOLUTION')}, "
+                   f"{part('EXPLANATION')}, {part('CHECK')})")
+    return "\n".join(out), n - counter
+
+
+def examples_compile_check(sp, m, md):
+    """The containers of one section must compile in the book: a failure here is found now, not in the whole book."""
+    typ, _ = examples_book_typst(sp, m, md, 0)
+    f = sp.d["build"] / "_check" / f"{uuid.uuid4().hex}.typ"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(PRELUDE + "\n" + (lf.WRAP_PRELUDE if LAYOUT_FIT else "") + "\n" + typ, encoding="utf-8")
+    try:
+        typst_compile(sp.root, f, f.with_suffix(".pdf"))
+    finally:
+        f.unlink(missing_ok=True)
+        f.with_suffix(".pdf").unlink(missing_ok=True)
+
+
+def make_examples(sp, subj, m, sha):
+    """One section: the model writes the containers, code checks them, the redraws are verified, the result is stored."""
+    d = m["dir"]
+    old = (d / "clean.md").read_text(encoding="utf-8")
+    s = find_subject(sp.load_syllabus(), subj) or {"title": subj}
+    begin_item(sp, "examples", L(f"приклади: {m['title'][:50]}", f"examples: {m['title'][:50]}"), subj, item=d.name)
+    work = sp.d["work"] / f"examples-{subj}-{d.name}"
+    shutil.rmtree(work, ignore_errors=True)
+    for sub in ("figs", "draw", "render"):
+        (work / sub).mkdir(parents=True)
+    (work / "clean.md").write_text(old, encoding="utf-8")
+    if (d / "original.md").exists():
+        (work / "original.md").write_text((d / "original.md").read_text(encoding="utf-8", errors="replace")[:80_000], encoding="utf-8")
+    figs = [f for f in (m.get("figures") or []) if (d / "figs" / f"{f['id']}.jpg").exists()]
+    see = bool(figs) and engine_sees(sp)
+    lines = []
+    for f in figs:
+        if see:
+            shutil.copy(d / "figs" / f"{f['id']}.jpg", work / "figs" / f"{f['id']}.jpg")
+        lines.append(f"- `figs/{f['id']}.jpg` (marker `{{{{fig:{f['id']}}}}}`): {str(f.get('caption') or '')[:160]}")
+    figures_text = ("The figures of the section (you can open the images):\n" + "\n".join(lines)) if see else \
+                   ("The section has figures (markers `{{fig:...}}`); you cannot open the images." if lines else "The section has no figures.")
+    base = render_prompt("examples.md", subject=s["title"], title=m["title"], figures=figures_text,
+                         draw_rules=DRAW_RULES_ON if see else DRAW_RULES_OFF)
+    prompt, new, res, problems = base, "", {}, []
+    for rnd in range(EXAMPLES_ROUNDS):
+        run_llm(sp, prompt, work, role="examples", need_vision=see)
+        res = read_json(work / "result.json", {}) or {}
+        f_new = work / "clean_ex.md"
+        if res.get("examples") == 0 and not f_new.exists():
+            new = ""
+            break
+        new = f_new.read_text(encoding="utf-8", errors="replace") if f_new.exists() else ""
+        problems = examples_problems(sp, d, m, old, new, work, res) if new.strip() else ["`clean_ex.md` was not written"]
+        if not problems:
+            break
+        log(f"[{sp.uid}] examples {subj}/{d.name}: round {rnd + 1} refused: {problems[0][:160]}")
+        prompt = render_prompt("repair.md", problems="\n".join(f"- {p}" for p in problems), task=base)
+    else:
+        raise PermanentError(L(f"не вдалося зробити приклади: {problems[0][:200]}", f"could not make the examples: {problems[0][:200]}"))
+    kept, given_up, n = [], [], 0
+    if new.strip():
+        draw_of = res.get("draw_of") if isinstance(res.get("draw_of"), dict) else {}
+        n = len(ex.examples_of(ex.parse(new)))
+        if see and ex.DRAW_RE.search(new):
+            new, kept, given_up = verify_drawings(sp, work, subj, new, draw_of)
+        else:
+            for x in sorted(set(ex.DRAW_RE.findall(new))):         # no way to compare: the photo stays
+                new = new.replace("{{draw:%s}}" % x, "{{fig:%s}}" % draw_of.get(x, ""))
+                given_up.append(x)
+    tmp = d / "examples.tmp"
+    shutil.rmtree(tmp, ignore_errors=True)
+    (tmp / "draw").mkdir(parents=True)
+    if new.strip():
+        (tmp / "clean_ex.md").write_text(new, encoding="utf-8")
+        for x in kept:
+            shutil.copy(work / "draw" / f"{x}.svg", tmp / "draw" / f"{x}.svg")
+    checks = sum(1 for e in ex.examples_of(ex.parse(new)) if e["sections"].get("CHECK")) if new.strip() else 0
+    write_json(tmp / "meta.json", {"sha": sha, "version": EXAMPLES_VERSION, "added": now_iso(), "examples": n, "drawn": kept,
+                                   "photo": given_up, "checks": checks})
+    final = d / "examples"
+    shutil.rmtree(final, ignore_errors=True)
+    tmp.rename(final)
+    if new.strip():
+        try:
+            examples_compile_check(sp, m, new)
+        except ValueError as e:
+            shutil.rmtree(final, ignore_errors=True)
+            raise PermanentError(L("контейнери не збираються в PDF: ", "the containers do not compile into the PDF: ") + " ".join(str(e).split())[:300])
+    shutil.rmtree(work, ignore_errors=True)
+    sp.mark_dirty(subj)
+    log(f"[{sp.uid}] examples {subj}/{d.name}: {n} containers, {len(kept)} drawings, {len(given_up)} kept as photos, {checks} with a CHECK")
+
+
+def record_examples_failure(sp, subj, m, sha, err):
+    f = examples_failures_file(sp)
+    fails = read_json(f, {}) or {}
+    key = f"{subj}/{m['topic']}/{m['dir'].name}"
+    prev = fails.get(key) or {}
+    fails[key] = {"sha": sha, "attempts": prev.get("attempts", 0) + 1 if prev.get("sha") == sha else 1, "error": str(err)[:500], "at": now_iso()}
+    write_json(f, fails)
+    log(f"[{sp.uid}] examples {key} attempt {fails[key]['attempts']} failed: {err}")
+
+
+def examples_run_subjects():
+    return {s for s, r in (examples_state().get("runs") or {}).items() if r.get("state") == "running"}
+
+
+def update_examples(sp):
+    """Make the containers of every section that needs them (new uploads; sections of a subject with a running run).
+    Returns an AuthError/TransientError message if the model is unusable."""
+    st = examples_state()
+    main = main_space()
+    runs = examples_run_subjects() if main and main.uid == sp.uid else set()
+    try:
+        for subj, m, sha in stale_examples(sp, st["since"], runs):
+            if subj in runs and subj not in examples_run_subjects():       # the run was paused or stopped meanwhile
+                continue
+            if soft_stop_apply(sp):
+                break
+            try:
+                make_examples(sp, subj, m, sha)
+                f = examples_failures_file(sp)
+                fails = read_json(f, {}) or {}
+                if fails.pop(f"{subj}/{m['topic']}/{m['dir'].name}", None) is not None:
+                    write_json(f, fails)
+            except (AuthError, TransientError, StoppedError):
+                raise
+            except Exception as e:
+                record_examples_failure(sp, subj, m, sha, e)
+                log(traceback.format_exc())
+    except (AuthError, TransientError) as e:
+        return str(e)
+    for subj in runs:                                                    # a run with nothing left to do is finished
+        if not stale_examples(sp, st["since"], {subj}):
+            examples_run_set(subj, state="done", finished=now_iso())
+    return None
+
+
+def examples_run_set(subject, **kw):
+    st = examples_state()
+    r = (st.get("runs") or {}).get(subject)
+    if r is not None:
+        r.update(kw)
+        write_json(EXAMPLES_STATE, st)
+
+
+class ExamplesError(ValueError):
+    pass
+
+
+def examples_run_action(subject, action):
+    """The admin's buttons of the examples run of one subject: start, pause, resume, stop."""
+    main = main_space()
+    if main is None or not find_subject(main.load_syllabus(), subject):
+        raise ExamplesError(L("невідомий предмет", "unknown subject"))
+    st = examples_state()
+    r = st["runs"].get(subject)
+    if action == "start":
+        if r and r.get("state") in ("running", "paused"):
+            raise ExamplesError(L("для цього предмета прогін уже є", "a run for this subject already exists"))
+        total = sum(1 for m in entries_of(main, subject) if examples_eligible(m, st["since"], {subject}))
+        if not total:
+            raise ExamplesError(L("у цьому предметі немає розділів, яким потрібні приклади", "this subject has no sections that need examples"))
+        st["runs"][subject] = {"state": "running", "started": now_iso(), "total": total}
+    elif action == "pause":
+        if not r or r.get("state") != "running":
+            raise ExamplesError(L("прогін не йде", "the run is not going"))
+        r["state"] = "paused"
+    elif action == "resume":
+        if not r or r.get("state") != "paused":
+            raise ExamplesError(L("прогін не на паузі", "the run is not paused"))
+        r["state"] = "running"
+    elif action == "stop":
+        if not r or r.get("state") not in ("running", "paused"):
+            raise ExamplesError(L("прогін не йде", "the run is not going"))
+        r.update(state="stopped", finished=now_iso())
+    elif action == "clear":
+        if r and r.get("state") in ("running", "paused"):
+            raise ExamplesError(L("спершу зупини прогін", "stop the run first"))
+        st["runs"].pop(subject, None)
+    else:
+        raise ExamplesError(L("невідома дія", "unknown action"))
+    write_json(EXAMPLES_STATE, st)
+
+
+def examples_runs_view():
+    main = main_space()
+    st = examples_state()
+    if main is None:
+        return {"runs": [], "subjects": []}
+    titles = {s["id"]: s["title"] for s in main.load_syllabus()["subjects"]}
+    fails = read_json(examples_failures_file(main), {}) or {}
+    runs = []
+    for subj, r in st["runs"].items():
+        ents = [m for m in entries_of(main, subj) if examples_eligible(m, st["since"], {subj})]
+        done = sum(1 for m in ents if examples_current(m["dir"]))
+        failed = sum(1 for m in ents if not examples_current(m["dir"]) and
+                     (fails.get(f"{subj}/{m['topic']}/{m['dir'].name}") or {}).get("attempts", 0) >= MAX_ATTEMPTS)
+        containers = sum((read_json(m["dir"] / "examples" / "meta.json", {}) or {}).get("examples", 0) for m in ents)
+        runs.append({"subject": subj, "title": titles.get(subj, subj), "state": r.get("state"), "started": r.get("started"),
+                     "finished": r.get("finished"), "total": len(ents), "done": done, "failed": failed, "containers": containers})
+    return {"runs": runs, "subjects": [{"id": k, "title": v} for k, v in titles.items()]}
 
 
 def build_book(sp, subj, edition):
@@ -4565,7 +6020,7 @@ def build_book(sp, subj, edition):
     topic_title = {t["id"]: t["title"] for t in s["topics"]}
     clean = edition == "clean"
     subtitle = "Clean edition — corrected and completed" if clean else "Original notes — as written, with the source pages"
-    out = [PRELUDE,
+    out = [PRELUDE, lf.WRAP_PRELUDE if LAYOUT_FIT else "",
            f"#set document(title: {typst_str(s['title'] + (' — clean' if clean else ' — original'))})",
            "#set page(paper: \"a4\", margin: (x: 2.2cm, top: 2.4cm, bottom: 2.4cm), numbering: \"1\", "
            "header: context { if counter(page).get().first() > 1 { set text(8pt, fill: luma(130)); "
@@ -4582,9 +6037,10 @@ def build_book(sp, subj, edition):
            "#outline(depth: 2, title: \"Contents\")",
            "#show heading.where(level: 1): it => { pagebreak(weak: true); v(1.2cm); text(size: 19pt, it); v(0.6cm) }"]
     glossary = {}   # casefolded term -> {term, definition, raw, chapters}
-    for chno, (day, ttitle, ents, extras, inters) in enumerate(parts, 1):
+    for chno, (day, ttitle, ents, extras, inters, links) in enumerate(parts, 1):
         if not clean and not ents:
             continue
+        ex_no = 0                                          # examples are numbered in each chapter
         out.append(f"#heading(level: 1, {typst_str(ttitle)}) <ch-{day}>" if clean else
                    f"#heading(level: 1, {typst_str(ttitle)})")
         for m in ents:
@@ -4608,9 +6064,19 @@ def build_book(sp, subj, edition):
                 continue
             out.append(f"#entrymeta({typst_str(info)})")
             if clean:
-                md = subst_figs((m["dir"] / "clean.md").read_text(encoding="utf-8"), sp.root, rel + "/figs",
-                                m.get("figures"))
-                out.append(cached_typst(sp, md))
+                exmd = examples_for_book(sp, m)         # the section with example containers, when they are made
+                if exmd:
+                    try:
+                        typ, k = examples_book_typst(sp, m, exmd, ex_no)
+                        ex_no += k
+                        out.append(typ)
+                    except Exception as e:
+                        log(f"[{sp.uid}] examples of {m['dir'].name} left out of the book: {type(e).__name__}: {e}")
+                        exmd = None
+                if not exmd:
+                    md = subst_figs((m["dir"] / "clean.md").read_text(encoding="utf-8"), sp.root, rel + "/figs",
+                                    m.get("figures"))
+                    out.append(laid_out(sp, cached_typst(sp, md)))
             else:
                 md = (m["dir"] / "original.md").read_text(encoding="utf-8")
                 lang = re.sub(r"[^a-z]", "", (m.get("lang_original") or "en").lower())[:3] or "en"
@@ -4619,7 +6085,7 @@ def build_book(sp, subj, edition):
                 for i, p in enumerate(imgs, 1):
                     label = f"{p['source']}" + (f", page {p['source_page']}" if p.get("source_page") else "") \
                         + f" — original {i}/{len(imgs)}"
-                    out.append(f"#pagephoto({typst_str(rel + '/pages/' + p['image'])}, {typst_str(label)})")
+                    out.append(page_photo_typ(sp, rel, p["image"], label))
         if clean:
             for x in extras:
                 body = cached_typst(sp, (x["dir"] / "explanation.md").read_text(encoding="utf-8"))
@@ -4627,6 +6093,16 @@ def build_book(sp, subj, edition):
             for x in inters:
                 out.append(f"#block(inset: (y: 4pt))[#text(weight: \"bold\")[Interactive:] "
                            f"#link({typst_str(x['url'])})[#{typst_str(x['title'])}]]")
+            for x in links:
+                label = "Video:" if x["kind"] == "video" else "Link:"
+                tail = f" #text(fill: luma(100))[— #{typst_str(x['summary'])}]" if x.get("summary") else ""
+                text = (f"#text(weight: \"bold\")[{label}] #link({typst_str(x['url'])})[#{typst_str(x['title'])}]{tail}")
+                pic = links_dir(sp, subj) / f"{x['id']}.jpg"
+                if pic.exists():
+                    out.append(f"#block(inset: (y: 4pt), breakable: false)[#grid(columns: (3.2cm, 1fr), gutter: 10pt, align: horizon, "
+                               f"image({typst_str('/' + pic.relative_to(sp.root).as_posix())}, width: 3.2cm), [{text}])]")
+                else:
+                    out.append(f"#block(inset: (y: 4pt))[{text}]")
             dg = digest_dir(sp, subj, day)
             if (dg / "summary.md").exists():
                 out.append(f"#heading(level: 2, numbering: none, {typst_str('Chapter summary')})")
@@ -5003,10 +6479,7 @@ def process_exam(sp, rpath):
     shutil.rmtree(final, ignore_errors=True)
     final.parent.mkdir(parents=True, exist_ok=True)
     tmp.rename(final)
-    r["done_at"] = now_iso()
-    write_json(sp.d["requests"] / "done" / rpath.name, r)
-    rpath.unlink()
-    shutil.rmtree(work, ignore_errors=True)
+    finish_request(sp, rpath, r, work=work)
     log(f"[{sp.uid}] exam {subj}/{rid}: {len(tickets)} tickets × {r['per']}")
 
 
@@ -5339,6 +6812,20 @@ def worker():
                 err = update_digests(sp)
             except StoppedError:
                 log(f"[{sp.uid}] summaries: stopped")
+                continue
+            if err:
+                blocked[sp.uid] = err
+                set_blocked(sp, err)
+                log(f"[{sp.uid}] blocked: {err}")
+        for sp in spaces():
+            # example containers + redrawn diagrams for new sections (and for a subject with a running run), once uploads have stopped
+            if sp.uid in blocked or sp.paused() or not sp.engine_ok() or not digests_due(sp):
+                continue
+            set_lang(sp.lang())
+            try:
+                err = update_examples(sp)
+            except StoppedError:
+                log(f"[{sp.uid}] examples: stopped")
                 continue
             if err:
                 blocked[sp.uid] = err
@@ -5955,10 +7442,13 @@ def or_auto_status(sp):
     ranked = or_free_ranked(sp, fetch=False)
     cool = or_cooling(sp)
     today = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
+    lv = or_live(sp, block=False)           # OpenRouter's own numbers, when known: ours also count refused requests
+    prof = sp.prof()
     return {"models": sum(m["enabled"] for m in ranked), "cooling": sum(m["id"] in cool for m in ranked),
             "all_until": st.get("all_until") if (st.get("all_until") or 0) > now_ else None,
-            "used_today": st.get("used", 0) if st.get("day") == today else 0, "cap": sp.prof().get("or_daily_cap"),
-            "paid": sp.prof().get("or_paid")}
+            "used_today": lv["used"] if lv else (st.get("used", 0) if st.get("day") == today else 0),
+            "cap": lv["limit"] if lv else prof.get("or_daily_cap"),
+            "paid": (lv["limit"] > 50) if lv else prof.get("or_paid"), "live": bool(lv)}
 
 
 def worker_busy_for(sp):
@@ -6025,19 +7515,39 @@ def book_files(sp, subject):
     return books
 
 
+def page_order(sp, subject):
+    """How the interactive pages of a subject are ordered everywhere: by the order of the study material, the same
+    as the chapters of the book. A page sits in the chapter (class day) of the latest entry on its topic, or on the
+    day it was made when its topic has no entries; on one day the topics keep the order of the syllabus, then the
+    pages of one topic go by the time they were added. -> a function: page meta -> sort key."""
+    topic_day = {}
+    for m in entries_of(sp, subject):
+        topic_day[m["topic"]] = max(topic_day.get(m["topic"], ""), m["date"])
+    s = find_subject(sp.load_syllabus(), subject) or {"topics": []}
+    topic_idx = {t["id"]: i for i, t in enumerate(s["topics"])}
+
+    def key(m):
+        added = str(m.get("added") or "")
+        return (topic_day.get(m.get("topic")) or added[:10] or "9999-12-31", topic_idx.get(m.get("topic"), 10**6), added)
+    return key
+
+
 def interactive_pages(sp, subject):
-    """The interactive pages of one subject, in file order (`by` is the raw uid: the web layer turns it into `mine`)."""
+    """The interactive pages of one subject in the order of the study material (see page_order); `rank` is the place
+    in that order. (`by` is the raw uid: the web layer turns it into `mine`.)"""
     out = []
-    for meta in sorted((sp.d["interactive"] / subject).glob("*.json")):
+    key = page_order(sp, subject)
+    for meta in (sp.d["interactive"] / subject).glob("*.json"):
         m = read_json(meta, {})
         try:        # the link changes with the file, so a page changed on "Edit" is never taken from a cache
             ver = "?v=" + format(meta.with_suffix(".html").stat().st_mtime_ns // 1000, "x")
         except OSError:
             ver = ""
-        out.append({"title": m.get("title"), "topic": m.get("topic_title") or m.get("topic"), "stem": meta.stem,
+        out.append((key(m) + (meta.stem,), {"title": m.get("title"), "topic": m.get("topic_title") or m.get("topic"), "stem": meta.stem,
                     "url": f"/i/{subject}/{meta.stem}.html{ver}", "added": m.get("added"), "by": m.get("by"),
-                    "edited": m.get("edited"), "can_undo": meta.with_name(meta.stem + ".prev.html").exists()})
-    return out
+                    "edited": m.get("edited"), "can_undo": meta.with_name(meta.stem + ".prev.html").exists()}))
+    out.sort(key=lambda x: x[0])
+    return [p | {"rank": i} for i, (_, p) in enumerate(out)]
 
 
 def class_days(sp, ents, topics):
@@ -6080,7 +7590,7 @@ def subject_view(sp, s, activity, making):
             "making": making,
             "topics": [{"id": t["id"], "title": t["title"], "entries": counts.get(t["id"], 0)} for t in s["topics"]],
             "days": [{"date": d, "entries": v} for d, v in sorted(class_days(sp, ents, s["topics"]).items())],
-            "books": book_files(sp, s["id"]), "interactive": inter, "activity": activity, "targets": targets,
+            "books": book_files(sp, s["id"]), "interactive": inter, "links": links_of(sp, s["id"]), "activity": activity, "targets": targets,
             "refs": _refs_list(sp.d["refs"], s["id"]),
             "open_refs": _refs_list(REFS_OPEN, s["id"]),
             "last_added": max((m["added"] for m in ents), default=None)}
@@ -6146,8 +7656,9 @@ def suggestions_view(sp):
 def engine_view(sp, prof):
     key, model = sp.or_key(), sp.or_model()
     mi = or_model_info(model, fetch=False) if model else None     # cached list only: this runs every 5 s
-    return {"name": sp.engine(), "ready": sp.engine_ok(),
+    return {"name": sp.engine(), "ready": sp.engine_ok(), "switch": engines_view(sp),
             "openrouter": {"hasKey": bool(key), "hint": ("…" + key[-4:]) if key else None, "model": model,
+                           "donate": donate_view(sp),
                            "vision": None if mi is None else mi["vision"], "auto": or_auto_status(sp) if model == OR_AUTO else None},
             "claude": {"model": prof.get("claude_model") if prof.get("claude_model") in CLAUDE_MODELS else "",
                        "effort": sp.claude_effort() or "", "default_model": MODEL,
@@ -6155,6 +7666,15 @@ def engine_view(sp, prof):
 
 
 def status(sp):
+    """What the web page shows to one person. The entries of a subject are read from the disk once for the whole request."""
+    token = _ENTRIES_MEMO.set({})
+    try:
+        return _status(sp)
+    finally:
+        _ENTRIES_MEMO.reset(token)
+
+
+def _status(sp):
     st = read_json(STATUS, {}) or {}
     prof = read_json(sp.profile, {}) or {}
     worker_view = {"state": st.get("state", "idle"), "last_run": st.get("last_run"),
@@ -6176,14 +7696,14 @@ def status(sp):
     is_admin = sp.uid in admin_uids()
     cs = sp.claude_status()
     return {"ok": True, "user": {"uid": sp.uid, "login": prof.get("login"), "name": prof.get("name")},
-            "is_admin": is_admin, "engine": engine_view(sp, prof),
+            "is_admin": is_admin, "n8n_url": N8N_URL if is_admin else None, "engine": engine_view(sp, prof),
             "admin_pending": sum(c["status"] == "proposed" for c in contributions()) if is_admin else 0,
             "suggestions": suggestions_view(sp), "suggest_limits": suggest_limits(sp),
             "usage": usage_view(sp), "limit_gate": sp.limit_gate(),
             "exam_limits": {"max_tickets": EXAM_MAX_TICKETS, "max_per": EXAM_MAX_PER, "wish_max": EXAM_WISH_MAX},
             "claude": {"loggedIn": cs.get("loggedIn"), "email": cs.get("email"),
                        "subscription": cs.get("subscription")},
-            "worker": worker_view, "blocked": prof.get("blocked"), "build_errors": prof.get("build_errors") or [],
+            "worker": worker_view, "working": working_view(st, sp), "blocked": prof.get("blocked"), "build_errors": prof.get("build_errors") or [],
             "paused": bool(prof.get("paused")), "soft_stop": bool(prof.get("soft_stop")), "running_here": busy_here,
             "turbo": {"on": bool(prof.get("turbo")), "available": sp.engine() == "openrouter", "n": TURBO_N},
             "digest_errors": [{"chapter": k, "error": v.get("error")} for k, v in
@@ -6238,6 +7758,21 @@ def retry_failed(sp, name):
         m["attempts"] = 0
         write_json(sp.d["requests"] / name, m)
         src.unlink()
+    return {"ok": True}
+
+
+def delete_failed(sp, name):
+    """The person deletes an item that failed for good (it stays in `failed/` until somebody retries or deletes it):
+    its files, its half-done work and every mark that names it go, as with a waiting item."""
+    name = name[:-5] if name.endswith(".json") and not (sp.d["failed"] / name).exists() else name
+    if not QUEUE_ID.fullmatch(name) or ".." in name:
+        return {"ok": False, "error": L("немає такого", "no such item")}
+    src = sp.d["failed"] / name
+    if not src.exists() and (sp.d["failed"] / f"{name}.json").exists():
+        src = sp.d["failed"] / f"{name}.json"
+    if not src.exists():
+        return {"ok": False, "error": L("немає такого", "no such item")}
+    purge_item(sp, "sub" if src.is_dir() else "req", src)
     return {"ok": True}
 
 
@@ -6512,8 +8047,8 @@ def _job_busy_qids(job):
     return set(st.get("cur_members") or []) | {st.get("cur_item")}
 
 
-def job_action(jid, action, step_id=None):
-    """The admin's buttons. Returns a short text for the page."""
+def job_action(jid, action, step_id=None, qid=None):
+    """The admin's buttons. Returns a short text for the page. `qid`: one upload of the step (action "drop")."""
     with open(JOB_LOCK, "a+") as lockf:
         fcntl.flock(lockf, fcntl.LOCK_EX)
         try:
@@ -6550,6 +8085,8 @@ def job_action(jid, action, step_id=None):
                         d = runner.d["inbox"] / (u["qid"] or "-")
                         if u["qid"] and d.exists() and u["qid"] not in busy:
                             shutil.rmtree(d)
+                        elif u["qid"] and (runner.d["failed"] / u["qid"]).exists():
+                            delete_failed(runner, u["qid"])          # an upload that failed is not left behind either
                     if s["state"] == "waiting":
                         s["state"] = "skipped"
                     elif s["state"] == "running":
@@ -6574,6 +8111,20 @@ def job_action(jid, action, step_id=None):
                 step.update(state="running", finished=None, error=None)
                 job.update(state="running", finished=None)
                 job_log(job, f"крок {step['id']} ({step['subject']}) повторюється", f"step {step['id']} ({step['subject']}) is retried")
+            elif action == "drop":
+                up = next((u for u in (step or {}).get("uploads", []) if qid and u["qid"] == qid), None)
+                if not up:
+                    raise JobError(L("такого файлу в цьому кроці немає", "no such file in this step"))
+                if qid in _job_busy_qids(job):
+                    raise JobError(L("цей файл зараз обробляється", "this file is being processed right now"))
+                if (runner.d["failed"] / qid).exists():
+                    delete_failed(runner, qid)
+                elif (runner.d["inbox"] / qid).exists():
+                    delete_queue_item(runner, qid)
+                else:
+                    raise JobError(L("цього файлу вже немає в черзі", "this file is no longer in the queue"))
+                job_log(job, f"файл «{up['label']}» кроку {step['id']} видалено з черги",
+                        f"file “{up['label']}” of step {step['id']} was deleted from the queue")
             elif action == "undo":
                 if not step or step["state"] not in ("done", "failed", "cancelled"):
                     raise JobError(L("відкотити можна крок, що закінчився", "only a step that has ended can be undone"))
@@ -6639,7 +8190,7 @@ def jobs_view():
                     sp_done += min(u["pages"], dn * CHUNK)
                 elif us == "done":
                     sp_done += u["pages"]
-                ups.append({"label": u["label"], "pages": u["pages"], "date": u["date"], "state": us, "progress": prog,
+                ups.append({"qid": u["qid"], "label": u["label"], "pages": u["pages"], "date": u["date"], "state": us, "progress": prog,
                             "held": us == "waiting" and bool((read_json(runner.d["inbox"] / (u["qid"] or "-") / "submission.json", {}) or {}).get("hold"))})
             if s["state"] == "done" and s.get("started") and s.get("finished"):
                 done_pages += s["pages"]

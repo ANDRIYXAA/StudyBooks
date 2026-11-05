@@ -22,7 +22,7 @@ What to do:
 2. Fix every rule break above with the smallest change that keeps the page's purpose, controls and look.
 3. Read the code for bugs: errors, controls that do nothing, NaN or division by zero, handlers on elements that do not exist, text or drawings that overflow a phone screen. Fix them.
 4. Check the physics, the maths and the units. If a formula or number is wrong, correct it and say so in `changes`.
-5. Do not add features and do not translate: keep the page's own language, layout and controls. Bring the look (colours, fonts, surfaces, buttons, plot colours) to the house style in the skill `studybooks-interactive`, so that the page looks like the Studybooks site.
+5. Do not add features, with one exception: every page needs English AND Ukrainian with an `EN | УКР` switch (see Languages in the skill `studybooks-interactive`). Keep the page's own language as one of the two, and add the other one. Keep the layout and the controls. Bring the look (colours, fonts, surfaces, buttons, plot colours) to the house style in the skill `studybooks-interactive`, so that the page looks like the Studybooks site.
 6. Decide where it belongs in the book. Subjects and topics:
 {{syllabus}}
 
