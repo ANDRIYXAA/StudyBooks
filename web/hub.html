@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Interactive pages</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: #0b0b0b; color: #f1f1ee; display: flex; flex-direction: column;
+         font-family: "Segoe UI", Roboto, Arial, sans-serif; }
+  header { padding: 14px 28px 6px; position: relative; }
+  .langbar { position: absolute; top: 12px; right: 28px; display: flex; }
+  .langbar button { padding: 5px 14px; font-size: 13px; }
+  .langbar button + button { border-left: 0; }
+  h1 { margin: 0 0 4px; font-weight: 300; font-size: clamp(18px, 1.6vw, 24px); letter-spacing: -0.2px; text-transform: lowercase; }
+  .sub { margin: 0; color: #a8a8a2; font-size: 13px; }
+  .menu { padding: 0 28px 14px; }
+  .menu summary { cursor: pointer; font: 12px/1 "Cascadia Mono", Consolas, monospace; color: #a8a8a2; padding: 8px 0; list-style: none;
+                  user-select: none; }
+  .menu summary::-webkit-details-marker { display: none; }
+  .btns { display: flex; flex-wrap: wrap; gap: 8px; }
+  .lbl { margin: 14px 0 6px; font: 12px/1 "Cascadia Mono", Consolas, monospace; color: #a8a8a2; letter-spacing: .04em; }
+  button { font: inherit; font-size: 15px; color: #f1f1ee; background: transparent; border: 1px solid #f1f1ee; padding: 10px 16px;
+           cursor: pointer; border-radius: 0; }
+  button:hover { background: #1c1c1a; }
+  button:focus-visible { outline: 2px solid #7fb2ff; outline-offset: 2px; }
+  button[aria-pressed="true"] { background: #f1f1ee; color: #0b0b0b; }
+  .bar { display: flex; gap: 14px; align-items: baseline; padding: 6px 28px 8px; border-top: 1px solid #262624; }
+  .bar h2 { margin: 0; font-weight: 300; font-size: 20px; text-transform: lowercase; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bar a { color: #a8a8a2; font-size: 13px; text-decoration: none; border-bottom: 1px solid #5a5a55; white-space: nowrap; }
+  .bar a:hover { color: #f1f1ee; }
+  main { flex: 1; min-height: 480px; display: flex; }
+  iframe { flex: 1; width: 100%; border: 0; background: #0b0b0b; }
+  .empty { padding: 40px 28px; color: #a8a8a2; }
+  [hidden] { display: none !important; }
+  .langbar .editb { margin-right: 12px; padding: 5px 14px; font-size: 13px; }
+  .langbar .editb[aria-expanded="true"] { background: #f1f1ee; color: #0b0b0b; }
+  .edit { padding: 0 28px 14px; }
+  .edit p { margin: 0 0 6px; color: #a8a8a2; font-size: 13px; }
+  .edit textarea { width: 100%; min-height: 84px; resize: vertical; background: #111; color: #f1f1ee; border: 1px solid #5a5a55; padding: 10px;
+                   font: 14px/1.4 "Segoe UI", Roboto, Arial, sans-serif; border-radius: 0; }
+  .edit .erow { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+  .edit .erow button { padding: 7px 14px; font-size: 14px; }
+  .edit .emsg { font-size: 13px; color: #a8a8a2; }
+  .edit .emsg.bad { color: #ff8a80; }
+  .edit .emsg.ok { color: #9be3a4; }
+  @media (max-width: 700px) { .edit { padding: 0 14px 12px; } .langbar .editb { margin-right: 8px; } }
+  @media (max-width: 700px) { header { padding: 16px 14px 6px; } .langbar { right: 14px; top: 14px; } .menu { padding: 0 14px 10px; } .bar { padding: 6px 14px; } button { padding: 9px 12px; } }
+  /* glass menu buttons: the same recipe as in the skill studybooks-interactive (dark only here) */
+  :root { --gl1:255,255,255; --gl2:0,0,0; --c0:#181818; --c1:#444; --c2:#8c8c8c; --c3:#f6f6f6; --band:#050505; --bt:#fff; }
+  @property --b { syntax:"<percentage>"; inherits:true; initial-value:85%; }
+  @property --q { syntax:"<percentage>"; inherits:true; initial-value:30%; }
+  @property --p { syntax:"<length>"; inherits:true; initial-value:0px; }
+  .gbtn { --p0:0px; --r:1; --b0:50%; --dir:90deg; --b:var(--b0); --q:var(--b0); --p:var(--p0); position:relative; display:inline-flex; align-items:center;
+    min-height:34px; padding:0; border:0; background:none; isolation:isolate; cursor:pointer; color:var(--bt); font:600 14px "Segoe UI", Roboto, Arial, sans-serif; }
+  .gbtn::before { content:""; position:absolute; inset:0; z-index:-1; pointer-events:none; background:
+    repeating-linear-gradient(180deg, rgba(var(--gl1),.6) 0, rgba(var(--gl1),.08) calc(var(--r)*1.2px), rgba(var(--gl2),.5) calc(var(--r)*3px), rgba(var(--gl2),0) calc(var(--r)*4.4px), rgba(var(--gl1),.2) calc(var(--r)*5.5px)) 0 var(--p),
+    repeating-linear-gradient(180deg, rgba(var(--gl2),0) 0, rgba(var(--gl1),.45) calc(var(--r)*2.4px), rgba(var(--gl2),.6) calc(var(--r)*4.6px), rgba(var(--gl2),0) calc(var(--r)*7.3px), rgba(var(--gl1),.1) calc(var(--r)*9px)) 0 calc(var(--p)*-1.3),
+    linear-gradient(90deg, rgba(var(--gl1),0) calc(var(--q) - 24%), rgba(var(--gl1),.3) var(--q), rgba(var(--gl1),0) calc(var(--q) + 24%)),
+    linear-gradient(90deg, var(--c0) calc(var(--b) - 55%), var(--c1) calc(var(--b) - 28%), var(--c2) calc(var(--b) - 12%), var(--c3) var(--b), var(--c2) calc(var(--b) + 12%), var(--c1) calc(var(--b) + 28%), var(--c0) calc(var(--b) + 55%)); }
+  .gbtn .gring { position:absolute; inset:0; z-index:1; pointer-events:none; padding:1.5px; background:
+    linear-gradient(90deg, rgba(var(--gl1),0) calc(var(--b) - 22%), rgba(var(--gl1),1) var(--b), rgba(var(--gl1),0) calc(var(--b) + 22%)), rgba(var(--gl1),.16);
+    -webkit-mask:linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite:xor; mask:linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0); }
+  .gbtn::after { content:""; position:absolute; inset:0; pointer-events:none; background:
+    linear-gradient(180deg, rgba(var(--gl1),.5), rgba(var(--gl1),0) 22%), linear-gradient(112deg, rgba(var(--gl1),0) 28%, rgba(var(--gl1),.26) 40%, rgba(var(--gl1),0) 52%), linear-gradient(0deg, rgba(var(--gl1),.22), rgba(var(--gl1),0) 16%); }
+  .gbtn > span { position:relative; z-index:1; isolation:isolate; display:block; padding:8px 22px; }
+  .gbtn > span::before { content:""; position:absolute; inset:-4px -7px; z-index:-1; background:var(--band);
+    -webkit-mask-image:linear-gradient(90deg, transparent, #000 24px, #000 calc(100% - 24px), transparent), linear-gradient(180deg, transparent, #000 40%, #000 60%, transparent); -webkit-mask-composite:source-in;
+    mask-image:linear-gradient(90deg, transparent, #000 24px, #000 calc(100% - 24px), transparent), linear-gradient(180deg, transparent, #000 40%, #000 60%, transparent); mask-composite:intersect; }
+  .gbtn i { font-style:normal; line-height:1.3; }
+  .gbtn[aria-pressed="true"] { outline:2px solid #f1f1ee; outline-offset:2px; }
+  span.gbtn { max-width: 100%; }
+  .gbtn > span > i { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+  /* small screens: a thin top bar (title + language), one row "☰ current page"; the list of pages opens over the page */
+  .alonel { display: none; }
+  @media (max-width: 900px), (max-height: 1100px) {
+    header { display: flex; align-items: center; gap: 10px; padding: 8px 12px; }
+    h1 { flex: 1; min-width: 0; margin: 0; font-size: 14px; font-weight: 400; letter-spacing: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sub { display: none; }
+    .langbar { position: static; flex: none; order: 3; }
+    .langbar button { padding: 4px 10px; font-size: 12px; }
+    .menu { position: relative; padding: 0 12px; border-top: 1px solid #262624; border-bottom: 1px solid #262624; }
+    .menu summary { padding: 6px 0; list-style: none; }
+    .menu summary::before, .menu:not([open]) summary::before { content: none; }
+    .menu[open] #groups { position: absolute; left: 0; right: 0; top: 100%; z-index: 10; max-height: 72vh; overflow: auto;
+      background: #0b0b0b; border-bottom: 1px solid #3a3a37; padding: 2px 12px 16px; }
+    .bar { display: none; }
+    .alonel { display: inline-block; margin-top: 12px; color: #a8a8a2; font-size: 13px; }
+    main { min-height: 0; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="langbar" role="group" aria-label="Language"><button type="button" class="editb" id="editBtn" aria-expanded="false"></button><button type="button" data-l="en">EN</button><button type="button" data-l="uk">УКР</button></div>
+  <h1 id="title"></h1>
+  <p class="sub" id="sub"></p>
+</header>
+<div class="edit" id="editBox" hidden>
+  <p id="editFor"></p>
+  <textarea id="editText" maxlength="2000"></textarea>
+  <div class="erow"><button type="button" id="editSend"></button><button type="button" id="editClose"></button><span class="emsg" id="editMsg" role="status"></span></div>
+</div>
+<details class="menu" id="menu" open>
+  <summary id="menusum"><span id="menuglass"><b class="gring" aria-hidden="true"></b><span><i id="menutxt"></i></span></span></summary>
+  <div id="groups"></div>
+</details>
+<div class="bar" id="bar" hidden>
+  <h2 id="cur"></h2>
+  <a id="alone" target="_blank" rel="noopener"></a>
+</div>
+<main id="main"><iframe id="frame" sandbox="allow-scripts" title="" loading="lazy"></iframe></main>
+<div class="empty" id="empty" hidden></div>
+<script>
+"use strict";
+const DATA = __DATA__;
+const T = {
+  sub: ["Обери тему: сторінка відкриється нижче.", "Choose a topic: the page opens below."],
+  menu: ["вибір сторінки", "choose a page"],
+  alone: ["відкрити окремо ↗", "open on its own ↗"],
+  empty: ["Сторінок цієї добірки більше немає (їх видалили).", "The pages of this selection are gone (they were deleted)."],
+  frame: ["Інтерактивна сторінка", "Interactive page"],
+  edit: ["Змінити", "Change"],
+  editFor: ["Що змінити на сторінці", "What should change on the page"],
+  editNote: ["Це може бути чужа сторінка: тоді оригінал лишиться, а твоя зміна з'явиться окремою сторінкою.", "This may be someone else's page: the original stays, and your change appears as a separate page."],
+  editPh: ["Наприклад: додай повзунок для маси, зроби графік більшим", "For example: add a slider for the mass, make the plot bigger"],
+  send: ["Надіслати запит", "Send request"],
+  close: ["Закрити", "Close"],
+  empty2: ["Напиши, що змінити", "Write what to change"],
+  sent: ["Запит у черзі. Коли зміна буде готова, онови цю сторінку.", "The request is queued. When the change is ready, reload this page."],
+  reload: ["Оновити", "Reload"],
+  signin: ["Щоб змінювати сторінки, увійди на головній сторінці сайту.", "To change pages, sign in on the main page of the site."],
+  failed: ["Не вийшло: ", "Failed: "],
+};
+function initialLang() {
+  try { const v = localStorage.getItem("hub.lang") || localStorage.getItem("lang"); if (v === "uk" || v === "en") return v; } catch (e) {}
+  return /^(uk|ru|be)/i.test(navigator.language || "") ? "uk" : "en";
+}
+const MQ = matchMedia("(max-width: 900px), (max-height: 1100px)");      // compact mode
+let LANG = initialLang();
+const t = k => T[k][LANG === "uk" ? 0 : 1];
+const $ = id => document.getElementById(id);
+const subj = DATA.subject;
+$("title").textContent = subj.page_title;
+document.title = subj.page_title + " – " + subj.title;
+
+/* One switch for the whole combined page: the chosen language is sent to the page in the frame (the site adds a small
+   listener to every interactive page, which presses the page's own EN / УКР button). */
+function sendLang() { try { $("frame").contentWindow.postMessage({sbLang: LANG}, "*"); } catch (e) {} }
+function glassVars(name) {            // each glass differs a little: numbers from its name, as on the site
+  let h = 7;
+  for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  const f = (sh, m) => ((h >>> sh) % m) / m;
+  return `--p0:${(f(0, 97) * 9).toFixed(1)}px;--r:${(.8 + f(7, 89) * .75).toFixed(2)};--b0:${Math.round(40 + f(13, 83) * 20)}%;--dir:${(h >>> 5) & 1 ? "270deg" : "90deg"}`;
+}
+function applyUi() {
+  document.documentElement.lang = LANG;
+  $("sub").textContent = subj.title + " · " + t("sub");
+  $("menutxt").textContent = MQ.matches ? "☰  " + (cur ? cur.title : t("menu")) : (($("menu").open ? "▾ " : "▸ ") + t("menu"));
+  const g = $("menuglass");
+  g.classList.add("gbtn");
+  g.style.cssText = glassVars(subj.id_c || "menu");
+  for (const b of document.querySelectorAll(".langbar button")) b.setAttribute("aria-pressed", String(b.dataset.l === LANG));
+  if (typeof cur !== "undefined" && cur) {
+    $("frame").title = t("frame") + ": " + cur.title;
+    $("alone").textContent = t("alone");
+  }
+  if (!all.length) $("empty").textContent = t("empty");
+  $("editBtn").textContent = t("edit");
+  $("editBtn").hidden = !all.length;
+  $("editFor").textContent = t("editFor") + (cur ? " «" + cur.title + "»? " : "? ") + t("editNote");
+  $("editText").placeholder = t("editPh");
+  $("editSend").textContent = t("send");
+  $("editClose").textContent = t("close");
+}
+/*__GLASS_JS__*/
+function setLang(l) {
+  LANG = l;
+  try { localStorage.setItem("hub.lang", l); } catch (e) {}
+  applyUi();
+  sendLang();
+}
+for (const b of document.querySelectorAll(".langbar button")) b.onclick = () => setLang(b.dataset.l);
+$("menu").addEventListener("toggle", applyUi);
+$("frame").addEventListener("load", () => { setTimeout(sendLang, 150); setTimeout(sendLang, 800); });
+
+/* Change: the request for the page that is open now (the same request as the Change button on the site) */
+function editMsg(text, cls, withReload) {
+  const m = $("editMsg");
+  m.className = "emsg " + (cls || "");
+  m.textContent = text;
+  if (withReload) { const b = mk("button", {type: "button"}, t("reload")); b.onclick = () => location.reload(); m.append(" ", b); }
+}
+function editToggle(open) {
+  const box = $("editBox");
+  box.hidden = open === undefined ? !box.hidden : !open;
+  $("editBtn").setAttribute("aria-expanded", String(!box.hidden));
+  if (!box.hidden) $("editText").focus();
+}
+$("editBtn").onclick = () => editToggle();
+$("editClose").onclick = () => editToggle(false);
+$("editSend").onclick = async () => {
+  const text = $("editText").value.trim();
+  if (!cur) return;
+  if (!text) return editMsg(t("empty2"), "bad");
+  $("editSend").disabled = true;
+  editMsg("…");
+  try {
+    const r = await fetch("/api/request", {method: "POST", headers: {"Content-Type": "application/json", "X-Lang": LANG},
+      body: JSON.stringify({kind: "ipage_edit", subject: subj.id, stem: cur.stem, text, images: []})});
+    if (r.ok) { $("editText").value = ""; editMsg(t("sent"), "ok", true); }
+    else if (r.status === 401) editMsg(t("signin"), "bad");
+    else { let d; try { d = (await r.json()).detail; } catch (e) { d = r.status; } editMsg(t("failed") + (typeof d === "string" ? d : r.status), "bad"); }
+  } catch (e) { editMsg(t("failed") + String(e.message || e), "bad"); }
+  $("editSend").disabled = false;
+};
+
+const all = [];
+for (const g of subj.groups) for (const p of g.pages) all.push(p);
+let cur = null;
+
+function mk(tag, props, text) {
+  const e = document.createElement(tag);
+  Object.assign(e, props || {});
+  if (text != null) e.textContent = text;
+  return e;
+}
+function renderMenu() {
+  const groups = $("groups");
+  groups.replaceChildren();
+  for (const g of subj.groups) {
+    groups.append(mk("div", {className: "lbl"}, g.topic));
+    const row = mk("div", {className: "btns"});
+    for (const p of g.pages) {
+      const b = mk("button", {type: "button"}, p.label);
+      b.setAttribute("aria-pressed", String(cur === p));
+      b.onclick = () => choose(p.stem, true);
+      row.append(b);
+    }
+    groups.append(row);
+  }
+  if (cur) { const a = mk("a", {className: "alonel", target: "_blank", rel: "noopener", href: cur.url}, t("alone")); groups.append(a); }
+}
+function choose(stem, fold) {
+  cur = all.find(p => p.stem === stem) || all[0];
+  renderMenu();
+  const f = $("frame");
+  const src = cur.url + (cur.url.includes("?") ? "&" : "?") + "embed=1";      // embed: the page uses the whole window
+  if (f.dataset.url !== src) { f.dataset.url = src; f.src = src; }
+  f.title = t("frame") + ": " + cur.title;
+  $("cur").textContent = cur.title;
+  const a = $("alone"); a.href = cur.url; a.textContent = t("alone");
+  $("bar").hidden = false;
+  try { history.replaceState(null, "", "#" + cur.stem); localStorage.setItem("hub.last." + subj.id_c, cur.stem); } catch (e) {}
+  if (fold && MQ.matches) $("menu").open = false;
+  applyUi();
+}
+if (!all.length) {
+  $("menu").hidden = true; $("main").hidden = true;
+  $("empty").hidden = false;
+  applyUi();
+} else {
+  let want = (location.hash || "").slice(1);
+  if (!want) { try { want = localStorage.getItem("hub.last." + subj.id_c) || ""; } catch (e) {} }
+  choose(want);
+  if (MQ.matches) $("menu").open = false;
+  applyUi();
+  MQ.addEventListener("change", () => { $("menu").open = !MQ.matches; renderMenu(); applyUi(); });
+}
+</script>
+</body>
+</html>

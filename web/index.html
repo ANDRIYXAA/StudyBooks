@@ -98,6 +98,8 @@ ul.list li.ipg { align-items: center; padding: 12px 0; }
 .ipg .ipt { flex: 1 1 0; min-width: 8em; }
 .ipg .ipb { flex: none; display: inline-flex; gap: 6px; }
 .ipe { flex: 1 0 100%; }
+.members { flex: 1 0 100%; margin-top: 6px; }
+.members > summary { font-size: 12px; color: var(--muted); cursor: pointer; }
 .bedit { margin-left: auto; }
 .turbo { display: inline-flex; align-items: center; gap: 6px; font: 600 13px var(--sans); border: 1px solid var(--ink); padding: 3px 10px; cursor: pointer; color: var(--ink); user-select: none; }
 .turbo input { margin: 0; accent-color: var(--ink); cursor: pointer; }
@@ -113,7 +115,7 @@ ul.list li.ipg { align-items: center; padding: 12px 0; }
 .shot img { height: 64px; max-width: 128px; object-fit: cover; border: 1px solid var(--line2); }
 .shot button { position: absolute; top: -7px; right: -7px; width: 20px; height: 20px; padding: 0; font: 700 14px/18px var(--sans); text-align: center; cursor: pointer; border: 1px solid var(--ink); background: var(--bg); color: var(--ink); }
 .gbtn > a:not(.btn) { text-decoration: none; color: var(--bt); }
-/* the button is a pill of reeded glass seen from the side: thin horizontal ribs of uneven width, fine grain, a bright
+/* the button is a pill of reeded glass seen from the side: thin horizontal ribs of uneven width, a bright
    side and a dark side, a lit rim, a glare. Each button gets its own --p (rib phase), --r (rib size), --b (where it is
    brightest) and --dir (which side), set from its name, so no two look the same. Across the middle a black band with
    blurred edges carries the text; the light theme is the same picture with the colours inverted.
@@ -129,7 +131,6 @@ ul.list li.ipg { align-items: center; padding: 12px 0; }
 .gbtn::before {
   content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
   background:
-    radial-gradient(circle, rgba(var(--gl1), .22) 0 .55px, transparent .85px) 0 0 / 2.6px 2.6px,
     repeating-linear-gradient(180deg, rgba(var(--gl1), .6) 0, rgba(var(--gl1), .08) calc(var(--r) * 1.2px), rgba(var(--gl2), .5) calc(var(--r) * 3px),
       rgba(var(--gl2), 0) calc(var(--r) * 4.4px), rgba(var(--gl1), .2) calc(var(--r) * 5.5px)) 0 var(--p),
     repeating-linear-gradient(180deg, rgba(var(--gl2), 0) 0, rgba(var(--gl1), .45) calc(var(--r) * 2.4px), rgba(var(--gl2), .6) calc(var(--r) * 4.6px),
@@ -200,6 +201,12 @@ ul.list { list-style: none; margin: 0; padding: 0; }
 ul.list li { padding: 10px 0; border-top: 1px solid var(--hair); font-size: 14px; display: flex; gap: 10px;
   justify-content: space-between; align-items: baseline; flex-wrap: wrap; }
 ul.list li:first-child { border-top: 0; }
+.lthumb { flex: none; width: 112px; height: 63px; border: 1px solid var(--line); background: var(--accent-soft); object-fit: cover; display: flex;
+  align-items: center; justify-content: center; color: var(--muted); font-size: 20px; }
+ul.list li.lk { align-items: center; }
+.lprev { display: flex; gap: 10px; align-items: center; padding: 8px 0; border-top: 1px solid var(--hair); font-size: 14px; }
+.lprev:first-child { border-top: 0; }
+#lprev { margin-top: 8px; }
 .muted { color: var(--muted); } .small { font-size: 13px; } .bad { color: var(--bad); } .warn { color: var(--warn); }
 .subj h3 { margin: 0; font: 700 clamp(19px, 2.6vw, 24px)/1.15 var(--sans); letter-spacing: -.025em; }
 .subj .code { color: var(--muted); font: 12px var(--mono); margin-left: 8px; vertical-align: middle; }
@@ -227,7 +234,7 @@ dialog::backdrop { background: var(--shade); }
 dialog h3 { margin: 0 0 12px; font: 300 26px/1.1 var(--sans); letter-spacing: -.03em; text-transform: lowercase; }
 dialog ol { padding-left: 20px; margin: 8px 0; } dialog li { margin: 6px 0; }
 .dlg-x { position: absolute; right: 12px; top: 12px; margin: 0; }
-dialog { position: relative; }
+dialog { position: fixed; }       /* fixed, not relative: a relative modal sits at the top of the document and the page jumps there */
 code { background: var(--accent-soft); padding: 1px 5px; border-radius: 0; font: 13px var(--mono); }
 .chk { display: flex; gap: 8px; align-items: flex-start; font-size: 14px; cursor: pointer; margin-top: 12px; }
 .chk input { margin-top: 4px; accent-color: var(--ink); }
@@ -265,8 +272,8 @@ a:not(.btn):hover { text-decoration-color: var(--ink); }
 .jfile { font-size: 12px; color: var(--muted); margin-left: 12px; }
 pre.skill { max-height: 360px; overflow: auto; white-space: pre-wrap; font: 12px/1.45 var(--mono); background: var(--bg);
   border: 1px solid var(--line); padding: 8px 10px; margin: 8px 0; }
-.engwrap { display: inline-flex; flex-direction: column; align-items: stretch; gap: 5px; }
-.usage { display: grid; grid-template-columns: auto minmax(46px, 1fr) auto; gap: 2px 7px; align-items: center; font: 11px/1.2 var(--mono); color: var(--muted); }
+.engwrap { display: inline-flex; flex-direction: column; align-items: stretch; gap: 5px; min-width: min(270px, 100%); }
+.usage { display: grid; grid-template-columns: auto minmax(90px, 1fr) auto; gap: 2px 8px; align-items: center; font: 11px/1.2 var(--mono); color: var(--muted); }
 .usage:empty { display: none; }
 .usage .t { height: 3px; border-radius: 0; background: var(--line); overflow: hidden; }
 .usage .t b { display: block; height: 100%; background: var(--ink); border-radius: 0; }
@@ -311,6 +318,23 @@ input[type=number] { font: inherit; color: var(--ink); background: var(--bg); bo
   <form method="dialog" class="dlg-x"><button class="btn small" data-i18n-label="common.close">×</button></form>
   <h3 data-i18n="dlg.title"></h3>
   <div id="dlgBody"></div>
+</dialog>
+<dialog id="comboDlg">
+  <form method="dialog" class="dlg-x"><button class="btn small" data-i18n-label="common.close">×</button></form>
+  <h3 data-i18n="combo.title"></h3>
+  <p class="muted small" data-i18n="combo.note"></p>
+  <div id="comboModeRow" hidden>
+    <label class="small" for="comboMode" data-i18n="combo.mode"></label>
+    <select id="comboMode" onchange="comboFill()" style="width:100%;margin:4px 0 10px"></select>
+  </div>
+  <div id="comboNameRow">
+    <label class="small" for="comboName" data-i18n="combo.name"></label>
+    <input id="comboName" type="text" maxlength="80" style="width:100%;margin:4px 0 10px">
+  </div>
+  <div class="small" id="comboPick" data-i18n="combo.pick"></div>
+  <div id="comboList" style="max-height:40vh;overflow:auto;margin:4px 0 10px"></div>
+  <div class="row"><button class="btn small primary" type="button" id="comboGo" onclick="comboSend()" data-i18n="combo.create"></button>
+  <span class="msg" id="comboMsg" role="status"></span></div>
 </dialog>
 <dialog id="auth">
   <form method="dialog" class="dlg-x" id="aX" hidden><button class="btn small" data-i18n-label="common.close">×</button></form>
@@ -397,6 +421,23 @@ input[type=number] { font: inherit; color: var(--ink); background: var(--bg); bo
     </div>
     <div class="bar" id="bar"><i></i></div>
     <div class="msg" id="sendMsg"></div>
+  </div>
+
+  <h2 data-i18n="link.h"></h2>
+  <div class="card">
+    <div class="muted small" data-i18n="link.help"></div>
+    <label class="f" for="lurls" data-i18n="link.urls"></label>
+    <textarea id="lurls" rows="3" maxlength="4000" spellcheck="false" data-i18n-ph="link.urlsPh"></textarea>
+    <div id="lprev" aria-live="polite"></div>
+    <label class="f" for="lsubject" data-i18n="add.subject"></label>
+    <select id="lsubject" onchange="linkModeSync()"><option value=""></option></select>
+    <div class="muted small" id="lmodeHint" style="margin-top:8px" data-i18n="link.hint.auto"></div>
+    <label class="f" for="lnote" data-i18n="link.note"></label>
+    <input type="text" id="lnote" maxlength="300" data-i18n-ph="link.notePh">
+    <div class="row" style="margin-top:14px">
+      <button class="btn primary" id="lsend" type="button" onclick="linkSend()" data-i18n="link.send"></button>
+    </div>
+    <div class="msg" id="lmsg" role="status"></div>
   </div>
 
   <h2 data-i18n="queue.h"></h2>
@@ -507,6 +548,13 @@ input[type=number] { font: inherit; color: var(--ink); background: var(--bg); bo
     <div class="msg" id="jobMsg"></div>
     <div id="jobBody"></div>
   </div>
+  <div class="card" id="exrCard" hidden>
+    <strong data-i18n="exr.h"></strong>
+    <div class="muted small" style="margin-top:4px" data-i18n="exr.intro"></div>
+    <div class="row wrap" style="margin-top:8px"><select id="exrSubject"></select><button class="btn small primary" type="button" onclick="exrStart()" data-i18n="exr.start"></button></div>
+    <div class="msg" id="exrMsg"></div>
+    <div id="exrBody"></div>
+  </div>
   <div class="card" id="svCard" hidden>
     <strong data-i18n="sv.h"></strong>
     <div class="muted small" style="margin-top:4px" data-i18n="sv.intro"></div>
@@ -517,6 +565,11 @@ input[type=number] { font: inherit; color: var(--ink); background: var(--bg); bo
     <div class="muted small" style="margin-top:4px" data-i18n="sk.intro"></div>
     <div class="msg" id="skMsg"></div>
     <div id="skBody"></div>
+  </div>
+  <div class="card" id="n8nCard" hidden>
+    <strong data-i18n="adm.n8n"></strong>
+    <div style="margin-top:6px"><a class="btn small" id="n8nLink" target="_blank" rel="noopener" data-i18n="adm.n8nOpen"></a></div>
+    <div class="muted small" style="margin-top:6px" data-i18n="adm.n8nNote"></div>
   </div>
   <div class="card" id="acctCard" hidden>
     <strong data-i18n="acc.h"></strong>
@@ -536,6 +589,7 @@ input[type=number] { font: inherit; color: var(--ink); background: var(--bg); bo
 <script>
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const apiPost = (url, body) => fetch(url, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});      // POST a JSON body, the Response comes back
 let S = null, picked = [];
 let THEME = document.documentElement.dataset.theme === "light" ? "light" : "dark";     // set early by the script in <head>
 
@@ -756,6 +810,53 @@ const D = [
   ["books.orig", s => `Оригінал · ${s}`, s => `Original · ${s}`],
   ["books.building", "Книга ще збирається", "The book is still being built"],
   ["books.inter", n => `Інтерактивні сторінки (${n})`, n => `Interactive pages (${n})`],
+  ["combo.btn", "Об'єднати сторінки…", "Combine pages…"],
+  ["combo.title", "Об'єднати сторінки в одну", "Combine pages into one"],
+  ["combo.note", "Лише сторінки цього предмета. Самі сторінки лишаються як є, а зведена сторінка завжди показує їхню найновішу версію.",
+    "Only pages of this subject. The pages themselves stay as they are, and the combined page always shows their newest version."],
+  ["combo.name", "Назва", "Title"],
+  ["combo.pick", "Які сторінки об'єднати (щонайменше дві)", "Which pages to combine (at least two)"],
+  ["combo.create", "Створити", "Create"],
+  ["combo.mode", "Що зробити", "What to do"],
+  ["combo.new", "Нова зведена сторінка", "A new combined page"],
+  ["combo.addTo", n => `Додати сторінки до: «${n}»`, n => `Add pages to: "${n}"`],
+  ["combo.pickAdd", "Які сторінки додати (щонайменше одну)", "Which pages to add (at least one)"],
+  ["combo.add", "Додати", "Add"],
+  ["combo.needOne", "Обери щонайменше одну сторінку", "Choose at least one page"],
+  ["combo.allIn", "Усі сторінки цього предмета вже є в цій зведеній.", "All pages of this subject are already in this combined page."],
+  ["link.h", "Посилання на відео й сайти", "Links to videos and sites"],
+  ["link.help", "Встав посилання на відео або сайт. Система сама прочитає назву сторінки, знайде предмет і тему та поставить посилання в потрібний розділ книги й у список «Посилання» під книгою.",
+   "Paste a link to a video or a site. The system reads the title of the page, finds the subject and the topic, and puts the link in the right chapter of the book and in the \u00abLinks\u00bb list under the book."],
+  ["link.urls", "Посилання (кожне з нового рядка)", "Links (one on each line)"],
+  ["link.urlsPh", "https://www.youtube.com/watch?v=…", "https://www.youtube.com/watch?v=…"],
+  ["link.note", "Підказка (необов'язково)", "Hint (optional)"],
+  ["link.notePh", "Про що це, до якого заняття", "What it is about, which class it is for"],
+  ["link.send", "Додати посилання", "Add links"],
+  ["link.sent", n => `У черзі: ${n}`, n => `Queued: ${n}`],
+  ["link.needOne", "Встав хоча б одне посилання", "Paste at least one link"],
+  ["link.reading", "Читаю сторінку…", "Reading the page…"],
+  ["link.noTitle", "(назву сторінки не вдалося прочитати)", "(could not read the title of the page)"],
+  ["link.known", "вже є в книзі", "already in the book"],
+  ["link.hint.auto", "Предмет «автоматично»: ШІ сам знайде предмет і тему та поставить посилання в потрібний розділ книги й у список.",
+   "Subject \u00abautomatic\u00bb: the AI finds the subject and the topic and puts the link in the right chapter of the book and in the list."],
+  ["link.hint.list", "Предмет вибрано: посилання одразу потрапляє в список «Посилання» під книгою, без ШІ. У PDF-книгу його поставить ШІ, щойно буде доступ до ШІ (воно чекає в черзі).",
+   "A subject is chosen: the link goes at once into the \u00abLinks\u00bb list under the book, with no AI. The AI puts it in the PDF book as soon as the AI is available (it waits in the queue)."],
+  ["link.added", n => `Додано в список: ${n}`, n => `Added to the list: ${n}`],
+  ["link.pending", "ще не в книзі (чекає ШІ)", "not in the book yet (waits for the AI)"],
+  ["link.addedOn", d => `додано: ${d}`, d => `added: ${d}`],
+  ["link.video", "відео", "video"],
+  ["link.site", "сайт", "site"],
+  ["link.day", d => `розділ: ${d}`, d => `chapter: ${d}`],
+  ["link.del", "Видалити", "Remove"],
+  ["link.delAsk", "Видалити це посилання з книги?", "Remove this link from the book?"],
+  ["books.links", n => `Посилання (${n})`, n => `Links (${n})`],
+  ["combo.suffix", "усе в одному", "all in one"],
+  ["combo.n", n => `${n} стор.`, n => `${n} pages`],
+  ["combo.del", "Видалити", "Delete"],
+  ["combo.members", n => `Сторінки в наборі (${n})`, n => `Pages in this set (${n})`],
+  ["combo.delAsk", "Видалити цю зведену сторінку? Самі сторінки лишаться.", "Delete this combined page? The pages themselves stay."],
+  ["combo.need", "Обери щонайменше дві сторінки", "Choose at least two pages"],
+  ["combo.noTitle", "Введи назву", "Enter a title"],
   ["books.days", n => `Заняття за датами (${n}) · змінити дату запису`, n => `Classes by date (${n}) · change an entry's date`],
   ["books.dateMoved", "Дату змінено. Книги перезберуться за кілька хвилин.", "Date changed. The books will rebuild in a few minutes."],
   ["books.refs", n => `Підручники для звірки (${n})`, n => `Reference textbooks (${n})`],
@@ -795,6 +896,7 @@ const D = [
   ["act.suggest", "Claude розглядає пропозицію…", "Claude is reviewing the suggestion…"],
   ["act.merge", "Claude аналізує доповнення для основної книги…", "Claude is analysing additions for the main book…"],
   ["act.digest", "Claude пише вижимку розділу…", "Claude is writing the chapter summary…"],
+  ["act.examples", "Claude робить контейнери прикладів…", "Claude is making the example containers…"],
   ["act.asis", "Додається PDF…", "Adding the PDF…"],
   ["act.exam", "Claude складає білети…", "Claude is making the tickets…"],
   ["act.build", "Книга збирається, зараз файл може бути старим…", "The book is being built; the file may be out of date for now…"],
@@ -858,6 +960,13 @@ const D = [
   ["usage.seen", hm => `оновлено ${hm}`, hm => `updated ${hm}`],
   ["usage.orToday", "безкоштовних запитів сьогодні", "free requests today"],
   ["usage.orPaused", hm => `пауза до ${hm}`, hm => `paused until ${hm}`],
+  ["usage.donFrom", "ліміт від друзів", "limit given to you"],
+  ["usage.donUsing", "зараз працюєш на ньому", "your work runs on it now"],
+  ["usage.donGives", "ти віддаєш", "you give"],
+  ["usage.donPaused", "пауза", "paused"],
+  ["usage.donTip", "Подаровані безкоштовні запити OpenRouter: використано з дозволених на сьогодні (рахується з півночі за UTC).", "Free OpenRouter requests given as a gift: used of the amount allowed today (counted from midnight UTC)."],
+  ["don.via", n => `від ${n}`, n => `from ${n}`],
+  ["combo.editWhich", "Яку сторінку змінити", "Which page to change"],
   ["ex.h", "Скласти білети до екзамену", "Make exam tickets"],
   ["ex.intro", "Claude складає набір екзаменаційних білетів з матеріалу обраних занять: теоретичні питання й задачі, у кожного білета така сама складність, а теми різні. Виходить два PDF: білети (для друку) і ті самі білети з еталонними відповідями. Далі можна тягнути випадковий білет, як на екзамені. Питання складаються з твоїх книг і підручників для звірки, тож відповіді варто перевіряти. PDF без тексту (завантажені «як є») у білети не потрапляють.",
     "Claude makes a set of exam tickets from the material of the classes you choose: theory questions and problems, every ticket about equally hard and on different topics. You get two PDFs: the tickets (to print) and the same tickets with model answers. Then you can draw a random ticket, as at the exam. The questions are made from your books and the reference textbooks, so check the answers. PDFs with no text (uploaded “as is”) are not used."],
@@ -902,6 +1011,9 @@ const D = [
   ["ex.reset", "Перемішати знову", "Shuffle again"],
   ["ex.deleted", "Набір видалено", "The set was deleted"],
 
+  ["adm.n8n", "Автоматизація n8n", "n8n automation"],
+  ["adm.n8nOpen", "Відкрити n8n ↗", "Open n8n ↗"],
+  ["adm.n8nNote", "Фонова обробка Studybooks працює як воркфлоу в n8n: там видно запуски й помилки. Відкривається лише з tailnet.", "The background run of Studybooks is a workflow in n8n: runs and errors are visible there. Opens on the tailnet only."],
   ["adm.main", "Основна книга", "Main book"],
   ["adm.intro", "Основна книга — це твоя бібліотека. Доповнення, які користувачі вже прийняли у своїх книгах і дозволили передати далі, Claude порівнює зі сторінками основної книги й готує чернетку злиття. Нічого не змінюється, поки ти не натиснеш «Злити». Усе можна скасувати.",
     "The main book is your library. Additions that users have already accepted in their own books and agreed to pass on are compared by Claude with the pages of the main book, and Claude prepares a merge draft. Nothing changes until you press “Merge”. Everything can be undone."],
@@ -933,6 +1045,21 @@ const D = [
   ["acc.orUnknown", "OpenRouter: невідомо", "OpenRouter: unknown"],
   ["acc.engClaude", "Claude", "Claude"],
 
+  ["exr.h", "Приклади в книзі", "Examples in the book"],
+  ["exr.intro", "Приклади з лекцій стають контейнерами (умова, схема, розв'язок, пояснення, перевірка), схеми перемальовуються й звіряються з фото. Нові завантаження отримують це самі. Для книг, що вже є, запусти прогін тут: він іде в черзі власника, поки не закінчаться розділи, і його можна призупинити чи зупинити.",
+   "The examples of the lectures become containers (problem, diagram, solution, explanation, check); diagrams are redrawn and compared with the photo. New uploads get this by themselves. For the books that already exist, start a run here: it works through the owner's queue until the sections are done, and it can be paused or stopped."],
+  ["exr.start", "Запустити для предмета", "Start for the subject"],
+  ["exr.none", "Прогонів немає.", "There are no runs."],
+  ["exr.st.running", "іде", "running"],
+  ["exr.st.paused", "на паузі", "paused"],
+  ["exr.st.done", "готово", "done"],
+  ["exr.st.stopped", "зупинено", "stopped"],
+  ["exr.prog", (d, n, f, c) => `розділів: ${d} з ${n}${f ? `, не вдалося: ${f}` : ""} · контейнерів: ${c}`, (d, n, f, c) => `sections: ${d} of ${n}${f ? `, failed: ${f}` : ""} · containers: ${c}`],
+  ["exr.pause", "Пауза", "Pause"],
+  ["exr.resume", "Продовжити", "Continue"],
+  ["exr.stop", "Зупинити", "Stop"],
+  ["exr.clear", "Прибрати", "Remove"],
+  ["exr.stopAsk", "Зупинити прогін? Що вже зроблено, лишиться в книзі.", "Stop the run? What is done stays in the book."],
   ["job.h", "Довгі прогони", "Long runs"],
   ["job.intro", "Одноразові великі роботи, наприклад перебудова всіх книг. Їх готує Claude, а виконує код без моделі: кроки йдуть по черзі самі, один крок = один предмет. Перед кроком предмет копіюється, тож крок можна відкотити.",
     "One-off big jobs, for example a rebuild of all books. Claude prepares them, and the code carries them out without a model: the steps start one after another by themselves, one step = one subject. Before a step starts, the subject is copied, so the step can be undone."],
@@ -1022,6 +1149,39 @@ const D = [
   ["sk.how.rollback", "відкат", "rollback"],
   ["sk.how.manual", "вручну", "manual"],
 
+  ["sw.h", "Перемикатися між", "Switch between"],
+  ["sw.note", "Вибрані двигуни працюють по черзі зліва направо. Коли в одного закінчується ліміт або вхід, ця сама робота без втрати контексту продовжується на наступному (що вже записано, він бачить у папці роботи); коли ліміт повертається, знову працює перший.",
+   "The selected engines are used from left to right. When one runs out of its limit or its sign-in, the same work goes on with the next one without losing the context (it sees in the work folder what is already written); when the limit is back, the first one works again."],
+  ["sw.rest", t => `ліміт до ${t}`, t => `limit until ${t}`],
+  ["sw.noConn", "підключи в вкладці нижче", "connect it in the tab below"],
+  ["sw.saved", "Збережено", "Saved"],
+  ["sw.need", "Обери хоча б один двигун", "Select at least one engine"],
+  ["codex.intro", "Codex працює з твоєю підпискою ChatGPT: сервер запускає незмінений Codex CLI, ти відкриваєш посилання, вводиш одноразовий код, і Codex сам зберігає вхід (сервер його не читає).",
+   "Codex works with your ChatGPT plan: the server runs the unmodified Codex CLI, you open the link, enter the one-time code, and Codex stores the sign-in itself (the server does not read it)."],
+  ["codex.warn", "Лише для власника книги: за умовами OpenAI, застосунок на віддаленому сервері з входом через ChatGPT потребує їхнього дозволу. Для решти людей є ключі Grok, Gemini й OpenRouter.",
+   "For the book's owner only: OpenAI's terms say an app on a remote server that uses ChatGPT sign-in needs their approval. Everybody else can use Grok, Gemini and OpenRouter keys."],
+  ["codex.owner", "Вхід через ChatGPT доступний лише власнику книги.", "A ChatGPT sign-in is available to the book's owner only."],
+  ["codex.missing", "Codex ще не встановлений на сервері.", "Codex is not installed on the server yet."],
+  ["codex.start", "Підключити ChatGPT", "Connect ChatGPT"],
+  ["codex.step1", "Відкрий посилання", "Open the link"],
+  ["codex.step2", "Увійди й введи цей код:", "Sign in and enter this code:"],
+  ["codex.step3", "Чекаю, поки ти закінчиш…", "Waiting for you to finish…"],
+  ["codex.ok", "Codex підключено", "Codex is connected"],
+  ["codex.out", "Вийти з Codex", "Sign out of Codex"],
+  ["codex.model", "Модель (порожньо = за замовчуванням Codex)", "Model (empty = the Codex default)"],
+  ["codex.effort", "Effort", "Effort"],
+  ["codex.defEffort", "за замовчуванням", "default"],
+  ["codex.fail", "Вхід не вдався: ", "The sign-in failed: "],
+  ["key.intro", n => `${n} працює з твоїм ключем API: встав його, сервер перевірить його в ${n} і збереже в закритому файлі (назад не показує, лише останні 4 знаки).`,
+                  n => `${n} works with your API key: paste it, the server checks it with ${n} and keeps it in a private file (it is never shown again, only the last 4 characters).`],
+  ["key.ph", "Ключ API", "API key"],
+  ["key.connect", "Підключити", "Connect"],
+  ["key.have", (n, h) => `${n} підключено, ключ ${h}`, (n, h) => `${n} is connected, key ${h}`],
+  ["key.remove", "Прибрати ключ", "Remove the key"],
+  ["key.model", "Модель", "Model"],
+  ["key.save", "Зберегти модель", "Save the model"],
+  ["key.checking", "Перевіряю ключ…", "Checking the key…"],
+  ["key.fail", "Ключ не прийнято: ", "The key was not accepted: "],
   ["eng.active", "активний", "active"],
   ["eng.intro", "Обери, чим обробляти твої матеріали: підпискою Claude або моделлю через OpenRouter. Вибір діє тільки для тебе й міняється будь-коли.",
     "Choose what processes your material: your Claude subscription or a model through OpenRouter. The choice applies only to you and can be changed at any time."],
@@ -1079,7 +1239,28 @@ const D = [
   ["or.keyOk", (label, rem) => `Ключ прийнято${label ? " («" + label + "»)" : ""}${rem != null ? ", залишок ліміту $" + rem : ""}.`,
     (label, rem) => `Key accepted${label ? " (“" + label + "”)" : ""}${rem != null ? ", $" + rem + " of the limit left" : ""}.`],
   ["or.keyRemoved", "Ключ видалено з сервера.", "The key was removed from the server."],
-  ["or.keyFirst", "Спершу збережи ключ", "Save the key first"],
+  ["or.keyFirst", "Спершу збережи ключ (або попроси когось віддати тобі свій ліміт)", "Save a key first (or ask somebody to give you their limit)"],
+  ["don.title", "Віддати свій ліміт", "Give your limit away"],
+  ["don.intro", "Дозволь іншим людям (кожну називаєш нікнеймом, кнопка + додає ще одну) користуватися твоїми безкоштовними запитами OpenRouter. Вони беруть їх тільки поки власного ключа немає або добовий ліміт вичерпано, і лише для безкоштовних моделей. Сам ключ ніхто не бачить. Забрати можна будь-коли.",
+    "Let other people use your free OpenRouter requests (name each one by nickname; the + button adds another). They use them only while they have no key of their own or their daily limit is used up, and only for free models. Nobody sees the key itself. You can take it back at any time."],
+  ["don.warn", "Увага: запити йдуть з твого акаунта OpenRouter. Їхні умови забороняють передавати доступ іншим (розділ 7, пункти 14 і 15), і за акаунт відповідаєш ти, навіть за чужі запити. Роби це лише для людини, якій довіряєш.",
+    "Warning: the requests come from your OpenRouter account. Their terms forbid passing access on to others (section 7, items 14 and 15), and you are responsible for the account, also for requests made by somebody else. Do this only for a person you trust."],
+  ["don.plus", "Додати ще одну людину", "Add another person"],
+  ["don.del", "Прибрати рядок", "Remove the row"],
+  ["don.nickPh", "нікнейм учасника", "participant's nickname"],
+  ["don.capLbl", "запитів на добу", "requests a day"],
+  ["don.real", n => `OpenRouter дозволяє твоєму ключу ${n} безкоштовних запитів на добу, і твоя робота та подарунок ділять їх. Більше цього числа віддати не вийде. Після поповнення рахунку на $10 ліміт стане 1000, це підхопиться само.`,
+    n => `OpenRouter allows your key ${n} free requests a day, and your own work and the gift share them. You cannot give more than that. After you top up $10 the limit becomes 1000; this is picked up by itself.`],
+  ["don.btn", "Donor to", "Donor to"],
+  ["don.needNick", "Введи нікнейм", "Type a nickname"],
+  ["don.needKey", "Спершу збережи свій ключ OpenRouter", "Save your own OpenRouter key first"],
+  ["don.given", "Ти віддаєш", "You give to"],
+  ["don.row", (name, used, cap) => `${name}: сьогодні ${used} з ${cap}`, (name, used, cap) => `${name}: ${used} of ${cap} today`],
+  ["don.take", "Забрати", "Take back"],
+  ["don.added", "Додано.", "Added."],
+  ["don.removed", "Забрано.", "Taken back."],
+  ["don.got", "Тобі віддають", "Given to you"],
+  ["don.gotRow", (name, left) => `${name}: ще ${left} запитів сьогодні`, (name, left) => `${name}: ${left} requests left today`],
   ["or.pickModel", "Обери модель", "Choose a model"],
   ["or.modelSaved", "Модель збережено.", "The model was saved."],
   ["or.nowUsing", "Тепер твої матеріали обробляє OpenRouter.", "OpenRouter now processes your material."],
@@ -1439,6 +1620,7 @@ function fillUpload() {
   setText($("#dateHint"), day ? (have ? t("add.dayHas", have) : t("add.dayNew")) : "", have ? "msg ok small" : "muted small");
   const subjOpts = S.subjects.map(s => `<option value="${esc(s.id)}">${esc(s.title)}</option>`).join("");
   setOptions($("#subject"), (asis ? `<option value="">${esc(t("add.pickSubject"))}</option>` : `<option value="">${esc(t("add.auto"))}</option>`) + subjOpts);
+  setOptions($("#lsubject"), `<option value="">${esc(t("add.auto"))}</option>` + subjOpts);
   const s = S.subjects.find(x => x.id === $("#subject").value);
   setOptions($("#utopic"), `<option value="">${esc(t("add.topicDefault"))}</option>` +
     (s?.topics || []).map(tp => `<option value="${esc(tp.id)}">${esc(tp.title)}${tp.entries ? ` (${tp.entries})` : ""}</option>`).join("") +
@@ -1551,9 +1733,8 @@ function fillTopics() {
 $("#rsend").onclick = async () => {
   const msg = $("#rmsg"), text = $("#rtext").value.trim();
   if (!text) { msg.textContent = t("req.empty"); msg.className = "msg bad"; return; }
-  const r = await fetch("/api/request", {method: "POST", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({kind: document.querySelector("input[name=rkind]:checked").value,
-      subject: $("#rsubject").value, topic: $("#rtopic").value, text})});
+  const r = await apiPost("/api/request", {kind: document.querySelector("input[name=rkind]:checked").value,
+      subject: $("#rsubject").value, topic: $("#rtopic").value, text});
   if (r.ok) { msg.textContent = t("req.queued"); msg.className = "msg ok"; $("#rtext").value = ""; refresh(); }
   else { msg.textContent = t("add.error", await r.text()); msg.className = "msg bad"; }
 };
@@ -1564,15 +1745,18 @@ let dtab = "claude", orModels = null;
 $("#claudeBtn").onclick = () => { dtab = S?.engine?.name || "claude"; renderDlg(); dlg.showModal(); };
 function renderDlg() {
   const act = S.engine?.name, tick = n => act === n ? ` <span class="tag ok">${esc(t("eng.active"))}</span>` : "";
-  body.innerHTML = `<div class="seg"><label><input type="radio" name="dt" value="claude" ${dtab === "claude" ? "checked" : ""}><span>Claude</span></label>
-      <label><input type="radio" name="dt" value="openrouter" ${dtab === "openrouter" ? "checked" : ""}><span>OpenRouter</span></label></div>${tick(dtab)}
+  body.innerHTML = `${switchBox()}<div class="seg">${SWN.map(n => `<label><input type="radio" name="dt" value="${n}" ${dtab === n ? "checked" : ""}><span>${esc(S.engine?.switch?.engines?.[n]?.label || n)}</span></label>`).join("")}</div>${tick(dtab)}
     <p class="small muted" style="margin-top:10px">${esc(t("eng.intro"))}</p>
     <div id="engBody"></div>`;
   body.querySelectorAll("input[name=dt]").forEach(r => r.onchange = () => { dtab = r.value; renderDlg(); });
-  if (dtab === "claude") S.claude?.loggedIn ? showConnected() : showStart(); else showOpenRouter();
+  bindSwitch();
+  if (dtab === "claude") S.claude?.loggedIn ? showConnected() : showStart();
+  else if (dtab === "codex") showCodex();
+  else if (dtab === "grok" || dtab === "gemini") showKeyEngine(dtab);
+  else showOpenRouter();
 }
 async function useEngine(engine, model) {
-  const r = await fetch("/api/engine", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({engine, model})});
+  const r = await apiPost("/api/engine", {engine, model});
   await refresh();
   return r.ok ? {ok: true} : {ok: false, message: await r.text().then(x => { try { return JSON.parse(x).detail; } catch (e) { return x; } })};
 }
@@ -1598,7 +1782,7 @@ async function startLogin() {
     const code = $("#lgCode").value.trim(), msg = $("#lgMsg");
     if (!code) return;
     $("#lgSend").disabled = true; msg.textContent = t("claude.checking"); msg.className = "msg";
-    const r = await fetch("/api/claude/code", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({code})});
+    const r = await apiPost("/api/claude/code", {code});
     const j = r.ok ? await r.json() : {ok: false, message: await r.text()};
     if (j.ok) { await useEngine("claude"); renderDlg(); $("#engBody").insertAdjacentHTML("beforeend", `<div class="msg ok">${esc(t("claude.ok", j.email))}</div>`); }
     else { msg.textContent = t("claude.fail", j.message); msg.className = "msg bad"; $("#lgSend").disabled = false; }
@@ -1622,8 +1806,7 @@ function showConnected() {
     <p class="small muted">${esc(t("claude.settingsTip"))}</p>
     <div class="msg" id="clMsg"></div>`;
   $("#clSave").onclick = async () => {
-    const r = await fetch("/api/claude/settings", {method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({model: $("#clModel").value, effort: $("#clEffort").value})});
+    const r = await apiPost("/api/claude/settings", {model: $("#clModel").value, effort: $("#clEffort").value});
     await refresh();
     $("#clMsg").textContent = r.ok ? t("claude.saved") : (await r.json().catch(() => ({}))).detail || t("common.failed");
     $("#clMsg").className = "msg " + (r.ok ? "ok" : "bad");
@@ -1632,6 +1815,98 @@ function showConnected() {
   $("#lgOut").onclick = async () => { await fetch("/api/claude/logout", {method: "POST"}); await refresh(); renderDlg(); };
   $("#lgRe").onclick = async () => { await fetch("/api/claude/logout", {method: "POST"}); startLogin(); };
 }
+/* ---------- the "switch between" box and the Codex / Grok / Gemini tabs ---------- */
+const SWN = ["claude", "openrouter", "codex", "grok", "gemini"];
+const swHM = ts => new Date(ts * 1000).toLocaleTimeString(loc(), {hour: "2-digit", minute: "2-digit"});
+function switchBox() {
+  const W = S.engine?.switch;
+  if (!W) return "";
+  return `<div class="card" style="margin:0 0 12px;padding:10px 12px"><strong class="small">${esc(t("sw.h"))}</strong>
+    <div class="row wrap" style="gap:4px 16px;margin-top:6px">${W.order.map(n => {
+      const e = W.engines[n], dis = !e.connected || (n === "codex" && e.allowed === false);
+      return `<label class="chk" style="margin:0" title="${esc(dis ? t("sw.noConn") : "")}"><input type="checkbox" data-sw="${esc(n)}" ${e.on && !dis ? "checked" : ""} ${dis ? "disabled" : ""}><span>${esc(e.label)}${
+        e.cool ? ` <span class="tag warn">${esc(t("sw.rest", swHM(e.cool)))}</span>` : ""}</span></label>`;
+    }).join("")}</div>
+    <div class="small muted" style="margin-top:6px">${esc(t("sw.note"))}</div><div class="msg" id="swMsg"></div></div>`;
+}
+function bindSwitch() {
+  document.querySelectorAll("input[data-sw]").forEach(c => c.onchange = async () => {
+    const on = [...document.querySelectorAll("input[data-sw]:checked")].map(x => x.dataset.sw), msg = $("#swMsg");
+    if (!on.length) { c.checked = true; msg.textContent = t("sw.need"); msg.className = "msg bad"; return; }
+    const r = await apiPost("/api/engines", {on});
+    const j = await r.json().catch(() => ({}));
+    await refresh();
+    renderDlg();
+    const m = $("#swMsg");
+    if (r.ok) { m.textContent = t("sw.saved"); m.className = "msg ok"; } else { m.textContent = String(j.detail || r.status); m.className = "msg bad"; }
+  });
+}
+async function postJSON(url, body) {
+  const r = await apiPost(url, body || {});
+  const j = await r.json().catch(() => ({}));
+  return {ok: r.ok, j, message: typeof j.detail === "string" ? j.detail : String(j.detail || r.status)};
+}
+function showCodex(note) {
+  const e = S.engine?.switch?.engines?.codex || {};
+  if (e.allowed === false) { eb().innerHTML = `<p class="small muted">${esc(t("codex.owner"))}</p>`; return; }
+  if (!e.installed) { eb().innerHTML = `<p class="small warn">${esc(t("codex.missing"))}</p>`; return; }
+  if (e.loggedIn) {
+    eb().innerHTML = `<p>${esc(t("codex.ok"))}${e.text ? ` <span class="muted small">· ${esc(e.text)}</span>` : ""}</p>
+      <div class="row" style="align-items:flex-end"><span style="flex:2"><label class="f">${esc(t("codex.model"))}</label><input type="text" id="cxModel" value="${esc(e.model || "")}" maxlength="120" spellcheck="false"></span>
+        <span style="flex:1"><label class="f">${esc(t("codex.effort"))}</label><select id="cxEffort"><option value="">${esc(t("codex.defEffort"))}</option>${
+          ["low", "medium", "high", "xhigh"].map(x => `<option ${e.effort === x ? "selected" : ""}>${x}</option>`).join("")}</select></span>
+        <button class="btn" id="cxSave">${esc(t("key.save"))}</button></div>
+      <div class="row" style="margin-top:8px"><button class="btn" id="cxOut">${esc(t("codex.out"))}</button></div><div class="msg" id="cxMsg">${esc(note || "")}</div>`;
+    $("#cxSave").onclick = async () => { const r = await postJSON("/api/engine/model", {engine: "codex", model: $("#cxModel").value.trim(), effort: $("#cxEffort").value});
+      await refresh(); const m = $("#cxMsg"); m.textContent = r.ok ? t("sw.saved") : r.message; m.className = "msg " + (r.ok ? "ok" : "bad"); };
+    $("#cxOut").onclick = async () => { await fetch("/api/codex/logout", {method: "POST"}); await refresh(); renderDlg(); };
+    return;
+  }
+  eb().innerHTML = `<p class="small">${esc(t("codex.intro"))}</p><p class="small warn">${esc(t("codex.warn"))}</p>${note ? `<p class="msg bad">${esc(note)}</p>` : ""}
+    <button class="btn primary" id="cxStart">${esc(t("codex.start"))}</button><div id="cxSteps"></div>`;
+  $("#cxStart").onclick = codexStart;
+}
+async function codexStart() {
+  $("#cxStart").disabled = true;
+  const r = await postJSON("/api/codex/login");
+  if (!r.ok) { showCodex(t("codex.fail") + r.message); return; }
+  $("#cxSteps").innerHTML = `<ol><li><a class="btn primary" href="${esc(r.j.url)}" target="_blank" rel="noopener noreferrer">${esc(t("codex.step1"))}</a></li>
+    <li>${esc(t("codex.step2"))} <strong class="mono">${esc(r.j.code || r.j.text || "")}</strong></li><li class="muted">${esc(t("codex.step3"))}</li></ol>`;
+  for (let i = 0; i < 450; i++) {                      // the one-time code lives about 15 minutes
+    await sleep(2000);
+    if (!$("#cxSteps")) return;                       // the dialog was closed or redrawn
+    const s = await (await fetch("/api/codex/status")).json().catch(() => ({}));
+    if (s.loggedIn && !s.pending) { await refresh(); renderDlg(); return; }
+    if (!s.pending) { showCodex(t("codex.fail") + (s.text || "")); return; }
+  }
+}
+async function showKeyEngine(n, note) {
+  const e = S.engine?.switch?.engines?.[n] || {}, name = e.label || n;
+  if (!e.hasKey) {
+    eb().innerHTML = `<p class="small">${esc(t("key.intro", name))}</p>${note ? `<p class="msg bad">${esc(note)}</p>` : ""}
+      <input type="password" id="keyIn" placeholder="${esc(t("key.ph"))}" autocomplete="off" spellcheck="false">
+      <div class="row" style="margin-top:10px"><button class="btn primary" id="keyGo">${esc(t("key.connect"))}</button></div><div class="msg" id="keyMsg"></div>`;
+    $("#keyGo").onclick = async () => {
+      const k = $("#keyIn").value.trim(); if (!k) return;
+      $("#keyGo").disabled = true; $("#keyMsg").textContent = t("key.checking"); $("#keyMsg").className = "msg";
+      const r = await postJSON("/api/engine/key", {engine: n, key: k});
+      if (r.ok) { await refresh(); renderDlg(); } else showKeyEngine(n, t("key.fail") + r.message);
+    };
+    return;
+  }
+  eb().innerHTML = `<p>${esc(t("key.have", name, e.hint || ""))}</p>
+    <label class="f">${esc(t("key.model"))}</label><div class="row"><select id="keyModel" style="flex:1"><option value="${esc(e.model || "")}">${esc(e.model || "…")}</option></select>
+      <button class="btn" id="keySave">${esc(t("key.save"))}</button></div>
+    <div class="row" style="margin-top:8px"><button class="btn" id="keyDel">${esc(t("key.remove"))}</button></div><div class="msg" id="keyMsg"></div>`;
+  $("#keySave").onclick = async () => { const r = await postJSON("/api/engine/model", {engine: n, model: $("#keyModel").value}); await refresh();
+    const m = $("#keyMsg"); m.textContent = r.ok ? t("sw.saved") : r.message; m.className = "msg " + (r.ok ? "ok" : "bad"); };
+  $("#keyDel").onclick = async () => { await postJSON("/api/engine/key/remove", {engine: n}); await refresh(); renderDlg(); };
+  try {
+    const j = await (await fetch("/api/engine/models/" + n)).json();
+    if (j.models?.length && $("#keyModel")) $("#keyModel").innerHTML = j.models.map(m => `<option value="${esc(m)}" ${m === e.model ? "selected" : ""}>${esc(m)}</option>`).join("");
+  } catch (err) {}
+}
+
 let freeState = null;      // edited here until saved
 async function loadFree() {
   if (!$("#orFree") || $("#orModel").value.trim() !== "auto:free") return;
@@ -1657,11 +1932,73 @@ function renderFree() {
   if ($("#orReset")) $("#orReset").onclick = async () => { await fetch("/api/openrouter/free/reset", {method: "POST"}); await refresh(); loadFree(); };
   $("#orFreeSave").onclick = async () => {
     const ms = freeState.models, msg = $("#orFreeMsg");
-    const r = await fetch("/api/openrouter/free", {method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({order: ms.map(m => m.id), exclude: ms.filter(m => !m.enabled).map(m => m.id)})});
+    const r = await apiPost("/api/openrouter/free", {order: ms.map(m => m.id), exclude: ms.filter(m => !m.enabled).map(m => m.id)});
     msg.textContent = r.ok ? t("free.saved") : (await r.json().catch(() => ({}))).detail || t("common.failed");
     msg.className = "msg " + (r.ok ? "ok" : "bad");
   };
+}
+/* "Donor to <nickname>": the nickname is typed by hand, the page never shows a list of people */
+function renderDonate(d, note, ok, keep) {
+  const box = $("#orDonate");
+  if (!box) return;
+  const o = S.engine?.openrouter || {};
+  d = d || o.donate || {to: [], from: []};
+  const slots = Math.max(1, (d.people || 5) - d.to.length);          // how many more people this person may name
+  const rowHTML = r => `<div class="row donrow" style="margin-bottom:4px"><input type="text" class="donNick" value="${esc(r.nick || "")}" placeholder="${esc(t("don.nickPh"))}" autocomplete="off" autocapitalize="off" spellcheck="false" style="flex:1">
+      <input type="number" class="donCap" min="1" max="${d.max || 1000}" value="${esc(r.cap ?? (d.default || 100))}" title="${esc(t("don.capLbl"))}" style="width:90px">
+      <button class="btn small donDel" type="button" title="${esc(t("don.del"))}" aria-label="${esc(t("don.del"))}">×</button></div>`;
+  const rowsHTML = list => list.slice(0, slots).map(rowHTML).join("");
+  box.innerHTML = `<hr style="margin:18px 0 4px;border:0;border-top:1px solid var(--line, #8884)">
+    <label class="f">${esc(t("don.title"))}</label>
+    <p class="small muted" style="margin:0 0 6px">${esc(t("don.intro"))}</p>
+    <p class="small" style="margin:0 0 8px">${esc(t("don.warn"))}</p>
+    ${d.to.length ? `<div class="small muted">${esc(t("don.given"))}</div><ul class="list">${d.to.map(x =>
+      `<li><span>${esc(t("don.row", x.name, x.used, x.cap))}</span><span><button class="btn small" data-take="${esc(x.id)}">${esc(t("don.take"))}</button></span></li>`).join("")}</ul>` : ""}
+    <div id="donRows">${rowsHTML((keep && keep.length) ? keep : [{}])}</div>
+    <div class="row" style="margin-top:6px"><button class="btn small" id="donPlus" type="button" title="${esc(t("don.plus"))}" aria-label="${esc(t("don.plus"))}">+</button>
+      <button class="btn" id="donBtn">${esc(t("don.btn"))}</button></div>
+    <div class="small muted">${esc(t("don.capLbl"))}</div>
+    ${d.limit ? `<div class="small muted">${esc(t("don.real", d.limit))}</div>` : ""}
+    <div class="msg ${ok ? "ok" : note ? "bad" : ""}" id="donMsg">${esc(note || "")}</div>
+    ${(d.from || []).length ? `<div class="small muted" style="margin-top:8px">${esc(t("don.got"))}</div><ul class="list">${d.from.map(x =>
+      `<li><span>${esc(t("don.gotRow", x.name, x.left))}</span></li>`).join("")}</ul>` : ""}`;
+  const call = async (url, payload) => {
+    const r = await apiPost(url, payload);
+    const tx = await r.text(); let j = {}; try { j = JSON.parse(tx); } catch (e) {}
+    return r.ok ? {ok: true, j} : {ok: false, message: typeof j.detail === "string" ? j.detail : (tx || t("common.failed"))};
+  };
+  const rowsBox = $("#donRows"), plus = $("#donPlus");
+  const sync = () => { plus.disabled = rowsBox.children.length >= slots; };
+  const bindDel = el => el.querySelector(".donDel").onclick = () => {
+    if (rowsBox.children.length > 1) el.remove(); else el.querySelector(".donNick").value = "";
+    sync();
+  };
+  rowsBox.querySelectorAll(".donrow").forEach(bindDel);
+  plus.onclick = () => {
+    if (rowsBox.children.length >= slots) return;
+    rowsBox.insertAdjacentHTML("beforeend", rowHTML({}));
+    const el = rowsBox.lastElementChild; bindDel(el); el.querySelector(".donNick").focus(); sync();
+  };
+  sync();
+  $("#donBtn").onclick = async () => {
+    const want = [...rowsBox.querySelectorAll(".donrow")].map(el => ({nick: el.querySelector(".donNick").value.trim(), cap: el.querySelector(".donCap").value}))
+      .filter(r => r.nick);
+    if (!want.length) return renderDonate(d, t("don.needNick"), false);
+    if (!o.hasKey) return renderDonate(d, t("don.needKey"), false, want);
+    $("#donBtn").disabled = plus.disabled = true;
+    let last = d, failed = [], errs = [];
+    for (const r of want) {                       // one by one: every person is looked up and checked on its own
+      const res = await call("/api/openrouter/donate", {nick: r.nick, cap: r.cap === "" ? undefined : +r.cap});
+      if (res.ok) last = res.j.donate; else { failed.push(r); errs.push(`${r.nick}: ${res.message}`); }
+    }
+    await refresh();
+    renderDonate(last, failed.length ? errs.join(" · ") : t("don.added"), !failed.length, failed);
+  };
+  box.querySelectorAll("[data-take]").forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    const r = await call("/api/openrouter/donate/remove", {id: b.dataset.take});
+    if (r.ok) { await refresh(); renderDonate(r.j.donate, t("don.removed"), true); } else renderDonate(d, r.message, false);
+  });
 }
 function showOpenRouter(msg = "", cls = "msg") {
   const o = S.engine?.openrouter || {}, active = S.engine?.name === "openrouter";
@@ -1676,7 +2013,9 @@ function showOpenRouter(msg = "", cls = "msg") {
     <div class="small muted" id="orInfo" style="margin-top:6px">${esc(t("or.hint"))}</div>
     <div id="orFree"></div>
     <div class="row" style="margin-top:14px"><button class="btn primary" id="orUse">${esc(active ? t("or.useSave") : t("or.use"))}</button></div>
-    <div class="${cls}" id="orMsg">${esc(msg)}</div>`;
+    <div class="${cls}" id="orMsg">${esc(msg)}</div>
+    <div id="orDonate"></div>`;
+  renderDonate();
   const info = () => {
     if ($("#orModel").value.trim() === "auto:free") { setText($("#orInfo"), t("or.autoInfo")); loadFree(); return; }
     $("#orFree").innerHTML = "";
@@ -1695,7 +2034,7 @@ function showOpenRouter(msg = "", cls = "msg") {
     const key = $("#orKey").value.trim();
     if (!key) return say(t("or.needKey"), false);
     $("#orSave").disabled = true; say(t("or.checkingKey"), true); $("#orMsg").className = "msg";
-    const r = await fetch("/api/openrouter/key", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({key})});
+    const r = await apiPost("/api/openrouter/key", {key});
     const tx = await r.text(); let j = {}; try { j = JSON.parse(tx); } catch (e) {}
     $("#orSave").disabled = false;
     if (!r.ok) return say(j.detail || tx, false);
@@ -1704,7 +2043,7 @@ function showOpenRouter(msg = "", cls = "msg") {
   if (o.hasKey) $("#orRm").onclick = async () => { await fetch("/api/openrouter/key/remove", {method: "POST"}); await refresh(); showOpenRouter(t("or.keyRemoved"), "msg ok"); };
   $("#orUse").onclick = async () => {
     const model = $("#orModel").value.trim();
-    if (!S.engine?.openrouter?.hasKey) return say(t("or.keyFirst"), false);
+    if (!S.engine?.openrouter?.hasKey && !(S.engine?.openrouter?.donate?.from || []).length) return say(t("or.keyFirst"), false);
     if (!model) return say(t("or.pickModel"), false);
     const r = await useEngine("openrouter", model);
     if (r.ok) showOpenRouter(active ? t("or.modelSaved") : t("or.nowUsing"), "msg ok"); else say(r.message, false);
@@ -1720,18 +2059,25 @@ async function delFile(b) {
   const {id, file, name} = b.dataset;
   if (!confirm(t("queue.delFileAsk", name))) return;
   b.disabled = true;
-  const r = await fetch("/api/queue/file/delete", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({id, file})});
+  const r = await apiPost("/api/queue/file/delete", {id, file});
   if (!r.ok) { let d; try { d = (await r.json()).detail; } catch (e) {} alert(typeof d === "string" ? d : t("common.failed")); }
   refresh();
 }
 async function delQueue(b, id, running) {
   if (!confirm(t(running ? "queue.delRunning" : "queue.delAsk"))) return;
   b.disabled = true;
-  const r = await fetch("/api/queue/delete", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({id})});
+  const r = await apiPost("/api/queue/delete", {id});
   if (!r.ok) { let d; try { d = (await r.json()).detail; } catch (e) {} alert(typeof d === "string" ? d : t("common.failed")); }
   refresh();
 }
 async function limitGo(b) { b.disabled = true; await fetch("/api/limit/continue", {method: "POST"}); refresh(); }
+async function delFailed(b, id) {
+  if (!confirm(t("queue.delAsk"))) return;
+  b.disabled = true;
+  const r = await apiPost("/api/queue/failed/delete", {id});
+  if (!r.ok) { let d; try { d = (await r.json()).detail; } catch (e) {} alert(typeof d === "string" ? d : t("common.failed")); }
+  refresh();
+}
 async function retry(id) { await fetch("/api/retry/" + encodeURIComponent(id), {method: "POST"}); refresh(); }
 $("#stopBtn").onclick = async () => {
   const b = $("#stopBtn");
@@ -1743,7 +2089,7 @@ $("#stopBtn").onclick = async () => {
 $("#turboBox").onchange = async () => {
   const box = $("#turboBox");
   box.disabled = true;
-  const r = await fetch("/api/turbo", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({on: box.checked})});
+  const r = await apiPost("/api/turbo", {on: box.checked});
   if (!r.ok) { let d; try { d = (await r.json()).detail; } catch (e) {} alert(typeof d === "string" ? d : t("common.failed")); }
   box.disabled = false;
   await refresh();
@@ -1773,7 +2119,8 @@ function render() {
   setText($("#members"), S.participants ? t("hdr.members", S.participants) : "");
   $("#members").hidden = !S.participants;
   document.querySelector(".engwrap").hidden = !!S.anon;
-  setText($("#claudeBtn"), !E.ready ? t("btn.setup") : E.name === "openrouter" ? "OpenRouter: " + (E.openrouter.model === "auto:free" ? t("btn.free") : (E.openrouter.model || "")) : "Claude: " + (c.email || t("common.connected")),
+  const SW = E.switch, nOn = SW ? SW.on.filter(n => SW.engines[n].connected).length : 0;
+  setText($("#claudeBtn"), !E.ready ? t("btn.setup") : nOn > 1 ? SW.on.filter(n => SW.engines[n].connected).map(n => SW.engines[n].label).join(" + ") : ["codex", "grok", "gemini"].includes(E.name) ? SW.engines[E.name].label + (SW.engines[E.name].model ? ": " + SW.engines[E.name].model : "") : E.name === "openrouter" ? "OpenRouter: " + (E.openrouter.model === "auto:free" ? t("btn.free") : (E.openrouter.model || "")) : "Claude: " + (c.email || t("common.connected")),
           E.ready ? "btn small" : "btn small primary");
 
   const tb = S.turbo || {};
@@ -1816,6 +2163,8 @@ function render() {
   renderExams();
   renderUsage();
   $("#adminTab").hidden = !S.is_admin;
+  $("#n8nCard").hidden = !(S.is_admin && S.n8n_url);
+  if (S.is_admin && S.n8n_url && $("#n8nLink").getAttribute("href") !== S.n8n_url) $("#n8nLink").href = S.n8n_url;
   setText($("#adminTab"), S.admin_pending ? t("nav.adminN", S.admin_pending) : t("nav.admin"));
   if (!S.is_admin && $("#tab-admin").classList.contains("on")) document.querySelector("nav button[data-tab=add]").click();
 
@@ -1831,7 +2180,8 @@ function render() {
   $("#failedWrap").hidden = !S.failed.length;
   setHTML($("#failed"), S.failed.map(f => `<li><span>${esc(f.label)}<br><span class="small bad">${esc((f.error || "").slice(0, 300))}</span>${
       f.file_links?.length ? `<br><span class="muted small">${esc(t("prog.files"))}${filesHTML(f.file_links)}</span>` : ""}</span>
-    <button class="btn small" onclick="retry('${esc(f.id)}')">${esc(t("common.retry"))}</button></li>`).join(""));
+    <span class="row"><button class="btn small" onclick="retry('${esc(f.id)}')">${esc(t("common.retry"))}</button>
+    <button class="btn small" type="button" onclick="delFailed(this, '${esc(f.id)}')">${esc(t("queue.del"))}</button></span></li>`).join(""));
   setHTML($("#recent"), S.recent.length ? S.recent.map(r => `<li><span>${esc(r.label)}
     <br><span class="muted small">${r.refs ? esc(t("recent.ref")) : pl((r.entries || []).length, "pl.entry")}${
       r.date ? ` · ${esc(t("recent.day", fmtDay(r.date)))}` : ""}${
@@ -1855,11 +2205,11 @@ function render() {
         ${bookEditBtn(s)}
       </div>
       ${bookEditBox(s)}
-      ${s.interactive.length || s.making.some(q => !q.entry_edit && !q.book_edit) ? `<details open data-k="${esc(s.id)}-inter"><summary>${esc(t("books.inter", s.interactive.length))}</summary><ul class="list">${
+      ${s.interactive.length || s.making.some(q => !q.entry_edit && !q.book_edit) ? `<details open data-k="${esc(s.id)}-inter"><summary>${esc(t("books.inter", glassCount(s)))}</summary>${(s.combined || []).length ? `<ul class="list">${s.combined.map(c => comboRow(s.id, c)).join("")}</ul>` : ""}${s.interactive.length > 1 ? `<p style="margin:6px 0"><button class="btn small" type="button" onclick="comboOpen('${esc(s.id)}')">${esc(t("combo.btn"))}</button></p>` : ""}<ul class="list">${
         s.making.filter(q => !q.entry_edit && !q.book_edit).map(q =>`<li><span>${q.edit ? esc(t("ipg.editing")) + " " : ""}${esc(q.text)}</span>${q.running ? act(q.edit ? "ipage_edit" : "interactive") : (S.paused && !q.queued_by_hand
           ? `<span class="muted small">${esc(t("req.paused"))}</span> <button class="btn small primary" type="button" onclick="runNow(this, '${esc(q.id)}')">${esc(t("req.runNow"))}</button>`
           : act("queued"))}</li>`).join("")}${
-        s.interactive.map(i => ipageRow(s.id, i)).join("")}</ul></details>` : ""}
+        s.interactive.filter(i => !mergedStems(s).has(i.stem)).map(i => ipageRow(s.id, i)).join("")}</ul></details>` : ""}
       ${s.days.length ? `<details data-k="${esc(s.id)}-days"><summary>${esc(t("books.days", s.days.length))}</summary>${
         s.days.map(d => `<div class="day"><strong>${esc(fmtDayLong(d.date))}</strong><ul class="list">${
           d.entries.map(e => `<li><span>${esc(e.title)} <span class="muted small">· ${esc(e.topic_title || e.topic)}</span>${
@@ -1867,6 +2217,8 @@ function render() {
               S.shared && e.mine ? " · " + esc(t("books.mine")) : ""}</span>` : ""}</span>
             ${S.anon || (S.shared && !e.mine) ? "" : `<input type="date" value="${esc(d.date)}" max="${today()}"
               onchange="moveEntry('${esc(s.id)}','${esc(e.topic)}','${esc(e.entry)}',this.value)">`}${entryEditUi(s, e)}</li>`).join("")}</ul></div>`).join("")}</details>` : ""}
+      ${(s.links || []).length ? `<details data-k="${esc(s.id)}-links"><summary>${esc(t("books.links", s.links.length))}</summary><ul class="list">${
+        s.links.map(l => linkRow(s.id, l)).join("")}</ul></details>` : ""}
       ${(s.refs.length + s.open_refs.length) ? `<details data-k="${esc(s.id)}-refs"><summary>${esc(t("books.refs", s.refs.length + s.open_refs.length))}</summary><ul class="list">${
         s.refs.concat(s.open_refs).map(r => `<li>${esc(r.title)}<span class="muted small">${r.pages} ${esc(t("unit.pages"))}${r.has_text ? "" : esc(t("books.noText"))}</span></li>`).join("")}</ul></details>` : ""}
     </div>`;}).join("") : `<div class="empty">${esc(t("books.empty"))}</div>`));
@@ -1893,11 +2245,19 @@ function renderUsage() {
       const text = rej ? t("usage.rejected") : frac != null ? Math.round(frac * 100) + "%" : t("usage.ok");
       return row(label, frac, text, cls, tip) + (l.resets && (rej || frac >= 0.75) ? `<span class="note">${esc(t("usage.resets", when(l.resets)))}</span>` : "");
     }).join("") || `<span class="note" title="${esc(t("usage.tip"))}">${esc(t("usage.none"))}</span>`;
-  } else if (u.auto) {
+  } else if (u.auto && u.own !== false) {          // no key of one's own: only the gifts below are shown
     const frac = u.cap ? Math.min(1, u.used / u.cap) : null, cls = frac >= 0.95 ? "x" : frac >= 0.75 ? "w" : "";
     html = `<span class="note">${esc(t("usage.orToday"))}${u.paid ? " · " + esc(t("usage.orPaid")) : ""}</span>` +
       row("", frac, u.cap ? `${u.used}/${u.cap}` : String(u.used), cls, t(u.paid ? "free.paid" : u.paid === false ? "free.unpaid" : "usage.orToday")) +
       (u.until ? `<span class="note x l">${esc(t("usage.orPaused", when(u.until)))}</span>` : "");
+  }
+  // limits that people give each other: from whom, how much of it is used today; and what this person gives away
+  const dn = u.donate;
+  if (dn) {
+    const drow = r => { const frac = r.cap ? Math.min(1, r.used / r.cap) : null;
+      return row(r.name, frac, `${r.used}/${r.cap}${r.paused ? " · " + t("usage.donPaused") : ""}`, frac >= 0.95 ? "x" : frac >= 0.75 ? "w" : "", t("usage.donTip")); };
+    if ((dn.from || []).length) html += `<span class="note">${esc(t("usage.donFrom"))}${dn.using ? " · " + esc(t("usage.donUsing")) : ""}</span>` + dn.from.map(drow).join("");
+    if ((dn.gives || []).length) html += `<span class="note">${esc(t("usage.donGives"))}</span>` + dn.gives.map(drow).join("");
   }
   setHTML(box, html);
 }
@@ -1927,8 +2287,7 @@ function progHTML(p) {
 async function moveEntry(subject, topic, entry, date) {
   const msg = $("#dayMsg");
   if (!date) return;
-  const r = await fetch("/api/entry/date", {method: "POST", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({subject, topic, entry, date})});
+  const r = await apiPost("/api/entry/date", {subject, topic, entry, date});
   if (r.ok) { msg.textContent = t("books.dateMoved"); msg.className = "msg ok"; }
   else { let d; try { d = (await r.json()).detail; } catch (e) { d = r.status; } msg.textContent = t("add.error", d); msg.className = "msg bad"; }
   refresh();
@@ -1937,31 +2296,7 @@ async function moveEntry(subject, topic, entry, date) {
 /* ---------- interactive pages: a glass button to open, a request to change ---------- */
 const IPE = {};         // pages with the change box open -> the text typed so far (a status refresh redraws the list)
 const ipKey = (subj, stem) => subj + "/" + stem;
-/* the glass flows while the pointer (or the keyboard focus) is on it; on leaving, the loop is not cut but run on to its end */
-const GLASS_MS = 3600;
-function glassIn(el) {
-  if (matchMedia("(prefers-reduced-motion: reduce)").matches || !el.animate) return;
-  let a = el._ga;
-  if (a) { a.playbackRate = 1; a.effect.updateTiming({iterations: Infinity}); return; }
-  const cs = getComputedStyle(el), b0 = cs.getPropertyValue("--b0").trim() || "85%", p0 = parseFloat(cs.getPropertyValue("--p0")) || 0, e = "ease-in-out";
-  try {
-    a = el.animate([{offset: 0, "--b": b0, "--q": b0, "--p": p0 + "px", easing: e}, {offset: .33, "--b": "8%", "--q": "92%", "--p": p0 + 6 + "px", easing: e},
-      {offset: .66, "--b": "92%", "--q": "8%", "--p": p0 + 12 + "px", easing: e}, {offset: 1, "--b": b0, "--q": b0, "--p": p0 + "px"}],
-      {duration: GLASS_MS, iterations: Infinity});
-  } catch (err) { return; }
-  a.onfinish = a.oncancel = () => { if (el._ga === a) el._ga = null; };
-  el._ga = a;
-}
-function glassOut(el) {
-  const a = el._ga;
-  if (!a) return;
-  a.effect.updateTiming({iterations: Math.floor((a.currentTime || 0) / GLASS_MS) + 1});     // finish the round that is running
-  a.playbackRate = 2;
-}
-addEventListener("mouseover", e => { const g = e.target.closest?.(".gbtn"); if (g) glassIn(g); });
-addEventListener("mouseout", e => { const g = e.target.closest?.(".gbtn"); if (g && !g.contains(e.relatedTarget)) glassOut(g); });
-addEventListener("focusin", e => { const g = e.target.closest?.(".gbtn"); if (g) glassIn(g); });
-addEventListener("focusout", e => { const g = e.target.closest?.(".gbtn"); if (g && !g.contains(e.relatedTarget)) glassOut(g); });
+/*__GLASS_JS__*/
 function ipVar(stem) {            // the glass of each button differs: numbers from its name
   let h = 7;
   for (const ch of stem) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
@@ -1999,8 +2334,7 @@ async function editSend(key, body, done) {
   const t0 = performance.now();
   let r, d;
   try {
-    r = await fetch("/api/request", {method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({...body, images: SHOTS[key] || []})});
+    r = await apiPost("/api/request", {...body, images: SHOTS[key] || []});
   } catch (e) { d = String(e.message || e); }
   await sleep(SHOT_SHOW_MS - (performance.now() - t0));
   delete SENDING[key];
@@ -2009,7 +2343,173 @@ async function editSend(key, body, done) {
   SHOTMSG[key] = t("add.error", d); shotsPaint(key);
 }
 async function ipageUndo(subj, stem) {
-  const r = await fetch("/api/ipage/undo", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({subject: subj, stem})});
+  const r = await apiPost("/api/ipage/undo", {subject: subj, stem});
+  if (!r.ok) { let d; try { d = (await r.json()).detail; } catch (e) { d = r.status; } alert(t("add.error", d)); }
+  refresh();
+}
+
+/* ---------- combined pages: pick which interactive pages of ONE subject go on one page with a menu ---------- */
+const mergedStems = s => new Set((s.combined || []).flatMap(c => c.parts || []));   // pages shown inside a combined page have no button of their own
+const glassCount = s => (s.combined || []).length + s.interactive.filter(i => !mergedStems(s).has(i.stem)).length;   // the counter counts the glass buttons on show
+function comboRow(subj, c) {
+  const s = S.subjects.find(x => x.id === subj);
+  const members = (s ? s.interactive : []).filter(i => (c.parts || []).includes(i.stem));
+  const ck = ipKey(subj, "combo-" + c.id), copen = ck in IPE && !S.anon && members.length > 0;
+  return `<li class="ipg"><span class="gbtn" style="${ipVar(c.id)}"><b class="gring" aria-hidden="true"></b><a class="glass" href="${esc(c.url)}" target="_blank" rel="noopener"><span><i title="${esc(c.title)}">${esc(c.title)}</i></span></a>${
+      members.length ? `<button class="gedit" type="button" aria-expanded="${copen}" onclick="comboEditToggle('${esc(subj)}','${esc(c.id)}')"><span>${esc(t("ipg.edit"))}</span></button>` : ""}</span>
+    ${copen ? comboEditBox(subj, c, members, ck) : ""}
+    ${c.can_delete ? `<span class="ipb"><button class="btn small" type="button" onclick="comboDel('${esc(subj)}','${esc(c.id)}')">${esc(t("combo.del"))}</button></span>` : ""}
+    ${members.length ? `<details class="members" data-k="${esc(subj)}-m-${esc(c.id)}"><summary>${esc(t("combo.members", members.length))}</summary><ul class="list">${members.map(i => ipageRow(subj, i)).join("")}</ul></details>` : ""}</li>`;
+}
+/* Edit on a combined page: the person picks which of its pages to change, the rest is the ordinary page edit */
+const CSTEM = {};
+function comboEditBox(subj, c, members, ck) {
+  const cur = members.some(m => m.stem === CSTEM[ck]) ? CSTEM[ck] : members[0].stem;
+  return `<div class="ipe"><p class="muted small" style="margin:0 0 6px">${esc(t("ipg.copyNote"))}</p>
+    <label class="f" style="margin-top:0">${esc(t("combo.editWhich"))}</label>
+    <select onchange="CSTEM['${esc(ck)}'] = this.value">${members.map(m => `<option value="${esc(m.stem)}" ${m.stem === cur ? "selected" : ""}>${esc(m.title)}</option>`).join("")}</select>
+    <textarea maxlength="2000" data-shots="i:${esc(ck)}" placeholder="${esc(t("ipg.ph"))}" oninput="IPE['${esc(ck)}'] = this.value">${esc(IPE[ck])}</textarea>
+    ${shotsUi("i:" + ck)}
+    <div class="row"><button class="btn small primary" type="button" onclick="comboEditSend(this,'${esc(subj)}','${esc(c.id)}')"${SENDING["i:" + ck] ? " disabled" : ""}>${esc(t("ipg.send"))}</button>
+    <button class="btn small" type="button" onclick="comboEditToggle('${esc(subj)}','${esc(c.id)}')">${esc(t("ipg.cancel"))}</button><span class="msg" role="status"></span></div></div>`;
+}
+function comboEditToggle(subj, cid) {
+  if (S?.anon) { openAuth(); return; }
+  const k = ipKey(subj, "combo-" + cid);
+  delete SHOTS["i:" + k];
+  if (k in IPE) delete IPE[k]; else IPE[k] = "";
+  render();
+  document.querySelector(".ipe textarea")?.focus();
+}
+async function comboEditSend(b, subj, cid) {
+  const k = ipKey(subj, "combo-" + cid), box = b.closest(".ipe"), msg = box.querySelector(".msg"), text = (IPE[k] || "").trim();
+  const stem = box.querySelector("select").value;
+  if (!text) { msg.textContent = t("req.empty"); msg.className = "msg bad"; return; }
+  editSend("i:" + k, {kind: "ipage_edit", subject: subj, stem, text}, () => { delete IPE[k]; });
+}
+function comboOpen(subj) {
+  if (S?.anon) { openAuth(); return; }
+  const s = S.subjects.find(x => x.id === subj);
+  if (!s) return;
+  const dlg = $("#comboDlg");
+  dlg.dataset.subject = subj;
+  $("#comboName").value = s.title + " – " + t("combo.suffix");
+  const sets = (s.combined || []).filter(c => c.can_add);       // anyone signed in may add pages to a set
+  $("#comboModeRow").hidden = !sets.length;
+  $("#comboMode").innerHTML = `<option value="">${esc(t("combo.new"))}</option>` + sets.map(c => `<option value="${esc(c.id)}">${esc(t("combo.addTo", c.title))}</option>`).join("");
+  $("#comboMode").value = "";
+  comboFill();
+  dlg.showModal();
+}
+/* The dialog has two modes: a new combined page (title, at least two pages) or pages added to an existing one (at least one page
+   that is not in it yet). The list of pages is in the order of the study material, as the server sends it. */
+function comboFill() {
+  const dlg = $("#comboDlg"), s = S.subjects.find(x => x.id === dlg.dataset.subject);
+  if (!s) return;
+  const cid = $("#comboMode").value, c = cid ? (s.combined || []).find(x => x.id === cid) : null;
+  const have = new Set(c ? c.parts || [] : []);
+  $("#comboNameRow").hidden = !!c;
+  $("#comboPick").dataset.i18n = c ? "combo.pickAdd" : "combo.pick";
+  $("#comboPick").textContent = t(c ? "combo.pickAdd" : "combo.pick");
+  $("#comboGo").dataset.i18n = c ? "combo.add" : "combo.create";
+  $("#comboGo").textContent = t(c ? "combo.add" : "combo.create");
+  const items = s.interactive.filter(i => !have.has(i.stem));
+  $("#comboList").innerHTML = items.length
+    ? items.map(i => `<label class="chk"><input type="checkbox" value="${esc(i.stem)}"><span>${esc(i.title)} <span class="muted small">${esc(i.topic || "")} · ${esc((i.added || "").slice(0, 16).replace("T", " "))}</span></span></label>`).join("")
+    : `<p class="muted small">${esc(t("combo.allIn"))}</p>`;
+  $("#comboMsg").textContent = ""; $("#comboMsg").className = "msg";
+}
+async function comboSend() {
+  const dlg = $("#comboDlg"), msg = $("#comboMsg");
+  const stems = [...dlg.querySelectorAll("#comboList input:checked")].map(x => x.value);
+  const cid = $("#comboMode").value, title = $("#comboName").value.trim();
+  const bad = m => { msg.textContent = m; msg.className = "msg bad"; };
+  if (cid) { if (!stems.length) return bad(t("combo.needOne")); }
+  else {
+    if (!title) return bad(t("combo.noTitle"));
+    if (stems.length < 2) return bad(t("combo.need"));
+  }
+  $("#comboGo").disabled = true;
+  try {
+    const r = await apiPost(cid ? "/api/combine/add" : "/api/combine", cid ? {subject: dlg.dataset.subject, id: cid, stems} : {subject: dlg.dataset.subject, title, stems});
+    if (!r.ok) { let d; try { d = (await r.json()).detail; } catch (e) { d = r.status; } return bad(String(d)); }
+    dlg.close();
+    refresh();
+  } finally { $("#comboGo").disabled = false; }
+}
+async function comboDel(subj, id) {
+  if (!confirm(t("combo.delAsk"))) return;
+  const r = await apiPost("/api/combine/delete", {subject: subj, id});
+  if (!r.ok) { let d; try { d = (await r.json()).detail; } catch (e) { d = r.status; } alert(t("add.error", d)); }
+  refresh();
+}
+
+/* ---------- links to videos and sites: added on the Add tab, filed by the system, listed under the book ---------- */
+/* the picture of a link: the thumbnail the server made from the page's own picture, else a plain box with a sign */
+const linkThumb = (l, big) => l.thumb ? `<img class="lthumb" src="${esc(l.thumb)}" alt="" width="112" height="63"${big ? "" : ' loading="lazy"'}>`
+  : `<span class="lthumb" aria-hidden="true">${l.kind === "video" ? "\u25b6" : "\u2197"}</span>`;
+function linkRow(subj, l) {
+  const href = /^https?:\/\//i.test(l.url) ? l.url : "#";       // the server only stores http(s); this keeps a javascript: address out anyway
+  return `<li class="lk"><a href="${esc(href)}" target="_blank" rel="noopener noreferrer" tabindex="-1" aria-hidden="true">${linkThumb(l)}</a><span class="grow"><a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(l.title)}</a>
+    <span class="muted small">· ${esc(t(l.kind === "video" ? "link.video" : "link.site"))} · ${esc(l.host)} · ${l.book === false ? esc(t("link.pending")) + " \u00b7 " + esc(t("link.addedOn", fmtDay((l.added || l.day).slice(0, 10)))) : (l.topic_title ? esc(l.topic_title) + " \u00b7 " : "") + esc(t("link.day", fmtDay(l.day)))}</span>${
+    l.summary ? `<br><span class="muted small">${esc(l.summary)}</span>` : ""}</span>
+    ${l.mine ? `<button class="btn small" type="button" onclick="linkDel('${esc(subj)}','${esc(l.id)}')">${esc(t("link.del"))}</button>` : ""}</li>`;
+}
+/* what the server read from each pasted address: the name of the page and its picture, shown under the box before sending */
+const LPREV = {};
+let lprevT = 0;
+const lprevTokens = () => $("#lurls").value.split(/\s+/).filter(Boolean).slice(0, 10);
+function lprevPaint() {
+  $("#lprev").innerHTML = lprevTokens().map(u => {
+    const p = LPREV[u], short = esc(u.length > 60 ? u.slice(0, 59) + "\u2026" : u);
+    if (!p || p.loading) return `<div class="lprev muted small"><span class="lthumb" aria-hidden="true">\u2026</span><span>${esc(t("link.reading"))} ${short}</span></div>`;
+    if (p.error) return `<div class="lprev"><span class="lthumb" aria-hidden="true">!</span><span class="msg bad small">${short} \u2014 ${esc(p.error)}</span></div>`;
+    return `<div class="lprev">${linkThumb({thumb: p.thumb, kind: p.kind}, true)}<span><b>${esc(p.title || t("link.noTitle"))}</b><br>
+      <span class="muted small">${esc(t(p.kind === "video" ? "link.video" : "link.site"))} \u00b7 ${esc(p.host)}${p.known ? " \u00b7 " + esc(t("link.known")) : ""}</span></span></div>`;
+  }).join("");
+}
+async function lprevRun() {
+  if (S?.anon) return;
+  for (const u of lprevTokens()) {
+    if (LPREV[u]) continue;
+    LPREV[u] = {loading: true};
+    try {
+      const r = await apiPost("/api/link/preview", {url: u});
+      let j = {}; try { j = await r.json(); } catch (e) {}
+      LPREV[u] = r.ok ? j : {error: String(j.detail || r.status)};
+    } catch (e) { LPREV[u] = {error: String(e.message || e)}; }
+    lprevPaint();
+  }
+}
+$("#lurls").oninput = () => { lprevPaint(); clearTimeout(lprevT); lprevT = setTimeout(lprevRun, 600); };
+const linkListMode = () => !!$("#lsubject").value;      // a subject was chosen: straight into the list, no AI for now
+function linkModeSync() {
+  const hint = $("#lmodeHint");
+  hint.dataset.i18n = linkListMode() ? "link.hint.list" : "link.hint.auto";
+  hint.textContent = t(hint.dataset.i18n);
+}
+async function linkSend() {
+  if (S?.anon) { openAuth(); return; }
+  const msg = $("#lmsg"), urls = $("#lurls").value.split(/\s+/).filter(Boolean);
+  const say = (m, cls) => { msg.textContent = m; msg.className = "msg " + (cls || ""); };
+  if (!urls.length) return say(t("link.needOne"), "bad");
+  const list = linkListMode();
+  $("#lsend").disabled = true;
+  try {
+    const r = await apiPost("/api/link", {urls, subject: $("#lsubject").value, note: $("#lnote").value,
+        titles: Object.fromEntries(urls.filter(u => LPREV[u]?.title).map(u => [LPREV[u].url, LPREV[u].title]))});
+    let j = {}; try { j = await r.json(); } catch (e) {}
+    if (!r.ok) return say(String(j.detail || r.status), "bad");
+    const sk = (j.skipped || []).map(x => `${x.url} \u2014 ${x.reason}`);
+    const n = j.queued || 0;
+    say(t(list ? "link.added" : "link.sent", n) + (sk.length ? " \u00b7 " + sk.join("; ") : ""), n ? "ok" : "bad");
+    if (n) { $("#lurls").value = ""; $("#lnote").value = ""; lprevPaint(); }
+    refresh();
+  } finally { $("#lsend").disabled = false; }
+}
+async function linkDel(subj, id) {
+  if (!confirm(t("link.delAsk"))) return;
+  const r = await apiPost("/api/link/delete", {subject: subj, id});
   if (!r.ok) { let d; try { d = (await r.json()).detail; } catch (e) { d = r.status; } alert(t("add.error", d)); }
   refresh();
 }
@@ -2167,7 +2667,7 @@ async function entryEditSend(b, subj, topic, entry) {
   editSend("e:" + k, {kind: "entry_edit", subject: subj, topic, entry, text}, () => { delete EEO[k]; });
 }
 async function entryEditUndo(subject, topic, entry) {
-  const r = await fetch("/api/entry/undo", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({subject, topic, entry})});
+  const r = await apiPost("/api/entry/undo", {subject, topic, entry});
   const msg = $("#dayMsg");
   if (r.ok) { msg.textContent = t("ee.undone"); msg.className = "msg ok"; }
   else { let d; try { d = (await r.json()).detail; } catch (err) { d = r.status; } msg.textContent = t("add.error", d); msg.className = "msg bad"; }
@@ -2176,8 +2676,15 @@ async function entryEditUndo(subject, topic, entry) {
 
 // what the server is doing to a book: spinner while Claude works or the PDFs are built, a pulsing dot while waiting
 const ACT_WAIT = {queued: 1};
+/* who is working right now: the labels start with "Claude", the real engine and model come from the worker's status */
+function engineWho() {
+  const w = S && S.working;
+  if (!w || !w.engine) return "Claude";
+  const m = String(w.model || "").replace(/^[^/]*\//, "").replace(/:free$/, "").replace(/-\d{6,}$/, "");
+  return ({openrouter: "OpenRouter", codex: "Codex", grok: "Grok", gemini: "Gemini"}[w.engine] || "Claude") + (m ? " · " + m : "") + (w.donor ? " · " + t("don.via", w.donor) : "");
+}
 function act(phase, extra = "") {
-  const key = "act." + phase, text = T.uk[key] ? t(key) : phase;
+  const key = "act." + phase, text = (T.uk[key] ? t(key) : phase).replace(/^Claude(?=\s)/, engineWho());
   return `<span class="act ${ACT_WAIT[phase] || !T.uk[key] ? "wait" : ""} ${extra}" role="status"><i aria-hidden="true"></i>${esc(text)}</span>`;
 }
 
@@ -2219,8 +2726,7 @@ $("#ssend").onclick = async () => {
   const [k, a, b] = v.split("|");
   const target = k === "e" ? {type: "entry", subject, topic: a, entry: b} : {type: "interactive", subject, stem: a};
   $("#ssend").disabled = true;
-  const r = await fetch("/api/suggest", {method: "POST", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({target, text, share: !S.is_admin && $("#sshare").checked})});
+  const r = await apiPost("/api/suggest", {target, text, share: !S.is_admin && $("#sshare").checked});
   if (r.ok) { msg.textContent = t("sug.ok"); msg.className = "msg ok"; $("#stext").value = ""; $("#stext").oninput(); }
   else { let d; try { d = (await r.json()).detail; } catch (e) { d = r.status; } msg.textContent = d; msg.className = "msg bad"; }
   refresh();
@@ -2310,7 +2816,7 @@ function resetDraw(sid, id) { delete exDrawn[id]; delete exLast[id]; saveDrawn()
 async function delExam(subject, id) {
   if (exDel !== id) { exDel = id; renderExams(); setTimeout(() => { if (exDel === id) { exDel = null; renderExams(); } }, 4000); return; }
   exDel = null;
-  const r = await fetch("/api/exam/delete", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({subject, id})});
+  const r = await apiPost("/api/exam/delete", {subject, id});
   const msg = $("#exmsg");
   if (r.ok) { delete exDrawn[id]; delete exLast[id]; saveDrawn(); msg.textContent = t("ex.deleted"); msg.className = "msg ok"; }
   else { let d; try { d = (await r.json()).detail; } catch (e) { d = r.status; } msg.textContent = t("add.error", d); msg.className = "msg bad"; }
@@ -2322,9 +2828,9 @@ $("#exmake").onclick = async () => {
   if (!subject || !days.length) { msg.textContent = t("ex.needDays"); msg.className = "msg bad"; return; }
   $("#exmake").disabled = true;
   const pick = name => document.querySelector(`input[name=${name}]:checked`).value;
-  const r = await fetch("/api/exam", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({
+  const r = await apiPost("/api/exam", {
     subject, days, tickets: +$("#exn").value, per: +$("#exper").value, mix: pick("exmix"), level: pick("exlevel"),
-    lang: $("#exlang").value, text: $("#extext").value.trim()})});
+    lang: $("#exlang").value, text: $("#extext").value.trim()});
   if (r.ok) { msg.textContent = t("ex.queued"); msg.className = "msg ok"; refresh(); }
   else { let d; try { d = (await r.json()).detail; } catch (e) { d = r.status; } msg.textContent = t("add.error", typeof d === "string" ? d : r.status); msg.className = "msg bad"; }
   $("#exmake").disabled = false;
@@ -2383,7 +2889,7 @@ function renderAccounts() {
 }
 async function accAct(user, action) {
   const msg = $("#acctMsg");
-  const r = await fetch(`/api/admin/accounts/${encodeURIComponent(user)}/${action}`, {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"});
+  const r = await apiPost(`/api/admin/accounts/${encodeURIComponent(user)}/${action}`, {});
   const j = await r.json().catch(() => ({}));
   if (r.ok) { msg.textContent = j.temp_password ? t("acc.temp", user, j.temp_password) : t("acc.done"); msg.className = "msg ok"; }
   else { msg.textContent = t("add.error", j.detail || r.status); msg.className = "msg bad"; }
@@ -2414,7 +2920,7 @@ function renderSupervisor() {
 }
 async function svRun(b) {
   b.disabled = true;
-  try { SV = await (await fetch("/api/admin/supervisor/run", {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"})).json(); renderSupervisor(); }
+  try { SV = await (await apiPost("/api/admin/supervisor/run", {})).json(); renderSupervisor(); }
   catch (e) {}
   b.disabled = false;
 }
@@ -2440,7 +2946,7 @@ function renderSkill() {
     ${hist ? `<details id="skHist" ${hopen ? "open" : ""}><summary>${esc(t("sk.hist"))}</summary><ul class="list">${hist}</ul></details>` : ""}`);
 }
 async function skPost(path, body) {
-  const r = await fetch(path, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body || {})});
+  const r = await apiPost(path, body || {});
   const j = await r.json().catch(() => ({}));
   const msg = $("#skMsg");
   if (!r.ok) { msg.textContent = t("add.error", j.detail || r.status); msg.className = "msg bad"; }
@@ -2455,6 +2961,39 @@ async function skAuto(on) { await skPost("/api/admin/skill/auto", {auto: on}); l
 async function skRollback(v) {
   if (await skPost("/api/admin/skill/rollback", {v})) { $("#skMsg").textContent = t("sk.rolled"); $("#skMsg").className = "msg ok"; }
   loadSkill();
+}
+
+/* ---------- admin: the examples runs (containers, redrawn diagrams) for the books that exist already ---------- */
+let EXR = null;
+async function loadExamples() {
+  try { EXR = await (await fetch("/api/admin/examples")).json(); renderExamples(); } catch (e) {}
+}
+function renderExamples() {
+  if (!EXR) return;
+  $("#exrCard").hidden = false;
+  setOptions($("#exrSubject"), (EXR.subjects || []).map(s => `<option value="${esc(s.id)}">${esc(s.title)}</option>`).join(""));
+  const btn = (s, a, key, cls = "") => `<button class="btn small ${cls}" type="button" onclick="exrAct('${esc(s)}','${a}')">${esc(t(key))}</button>`;
+  setHTML($("#exrBody"), (EXR.runs || []).length ? EXR.runs.map(r => {
+    const pct = r.total ? Math.round(100 * r.done / r.total) : 0, live = ["running", "paused"].includes(r.state);
+    return `<div class="card" style="margin-top:10px"><div class="row wrap"><strong>${esc(r.title)}</strong><span class="tag ${r.state === "done" ? "ok" : ""}">${esc(t("exr.st." + r.state))}</span></div>
+      <div class="jbar"><i style="width:${pct}%"></i></div>
+      <div class="small">${esc(t("exr.prog", r.done, r.total, r.failed, r.containers))}</div>
+      <div class="row" style="margin-top:8px">${r.state === "running" ? btn(r.subject, "pause", "exr.pause") : ""}${r.state === "paused" ? btn(r.subject, "resume", "exr.resume", "primary") : ""}${
+        live ? btn(r.subject, "stop", "exr.stop") : btn(r.subject, "clear", "exr.clear")}</div></div>`;
+  }).join("") : `<div class="muted small" style="margin-top:8px">${esc(t("exr.none"))}</div>`);
+}
+async function exrPost(subject, action) {
+  const msg = $("#exrMsg");
+  const r = await apiPost(`/api/admin/examples/${encodeURIComponent(subject)}/${action}`, {});
+  const j = await r.json().catch(() => ({}));
+  if (r.ok) { msg.textContent = t("acc.done"); msg.className = "msg ok"; }
+  else { msg.textContent = t("add.error", j.detail || r.status); msg.className = "msg bad"; }
+  loadExamples();
+}
+function exrStart() { const s = $("#exrSubject").value; if (s) exrPost(s, "start"); }
+function exrAct(subject, action) {
+  if (action === "stop" && !confirm(t("exr.stopAsk"))) return;
+  exrPost(subject, action);
 }
 
 /* ---------- admin: long runs (jobs) that Claude prepared and the code carries out ---------- */
@@ -2473,7 +3012,8 @@ function renderJobs() {
     const pct = j.pages ? Math.round(100 * j.pages_done / j.pages) : 0, live = j.state === "running";
     const steps = j.steps.map(s => {
       const files = s.uploads.map(u => `<div class="jfile">${esc(u.label)} · ${esc(t("job.fpages", u.pages))} · ${
-        esc(t("job.fs." + u.state))}${u.held ? " · " + esc(t("job.held")) : ""}${u.progress ? " · " + esc(t("job.chunk", u.progress.chunk || u.progress.done + 1, u.progress.chunks)) : ""}</div>`).join("");
+        esc(t("job.fs." + u.state))}${u.held ? " · " + esc(t("job.held")) : ""}${u.progress ? " · " + esc(t("job.chunk", u.progress.chunk || u.progress.done + 1, u.progress.chunks)) : ""}${
+        u.qid && ["failed", "waiting"].includes(u.state) && s.state !== "waiting" ? ` <button class="x" type="button" title="${esc(t("queue.delFile"))}" aria-label="${esc(t("queue.delFile"))}" onclick="jobDrop('${esc(j.id)}','${esc(s.id)}','${esc(u.qid)}')">✕</button>` : ""}</div>`).join("");
       const can = [];
       if (s.state === "waiting" && live) can.push(btn(j.id, "skip", "job.skip", s.id));
       if (s.state === "failed") can.push(btn(j.id, "retry", "job.retry", s.id, "primary"));
@@ -2500,11 +3040,20 @@ function renderJobs() {
       <details data-k="${esc(j.id)}log" ${open.has(j.id + "log") ? "open" : ""}><summary>${esc(t("job.log"))}</summary>${logs}</details></div>`;
   }).join("") : `<div class="muted small" style="margin-top:8px">${esc(t("job.none"))}</div>`);
 }
+async function jobDrop(id, step, qid) {
+  if (!confirm(t("queue.delAsk"))) return;
+  const msg = $("#jobMsg");
+  const r = await apiPost(`/api/admin/job/${encodeURIComponent(id)}/drop`, {step, qid});
+  const j = await r.json().catch(() => ({}));
+  if (r.ok) { msg.textContent = j.msg || t("acc.done"); msg.className = "msg ok"; }
+  else { msg.textContent = t("add.error", j.detail || r.status); msg.className = "msg bad"; }
+  loadJobs();
+}
 async function jobAct(id, action, step) {
   if (action === "cancel" && !confirm(t("job.cAsk"))) return;
   if (action === "undo" && !confirm(t("job.uAsk"))) return;
   const msg = $("#jobMsg");
-  const r = await fetch(`/api/admin/job/${encodeURIComponent(id)}/${action}`, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({step})});
+  const r = await apiPost(`/api/admin/job/${encodeURIComponent(id)}/${action}`, {step});
   const j = await r.json().catch(() => ({}));
   if (r.ok) { msg.textContent = j.msg || t("acc.done"); msg.className = "msg ok"; }
   else { msg.textContent = t("add.error", j.detail || r.status); msg.className = "msg bad"; }
@@ -2515,12 +3064,12 @@ async function loadAdmin() {
   try { M = await (await fetch("/api/admin/merge")).json(); renderAdmin(); } catch (e) {}
 }
 async function mAct(id, action) {
-  const r = await (await fetch(`/api/admin/merge/${id}/${action}`, {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"})).json();
+  const r = await (await apiPost(`/api/admin/merge/${id}/${action}`, {})).json();
   if (!r.ok) alert(r.error || t("common.failed"));
   refresh();
 }
 async function mState(body) {
-  await fetch("/api/admin/merge/state", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  await apiPost("/api/admin/merge/state", body);
   refresh();
 }
 
@@ -2593,8 +3142,7 @@ $("#aForm").onsubmit = async ev => {
   if (mode === "register" && pw !== $("#ap2").value) return fail(t("auth.mismatch"));
   go.disabled = true; setText($("#aState"), t("auth.checking"));
   try {
-    const r = await fetch("/api/auth/" + mode, {method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({username: user, password: pw, ...(await humanProof())})});
+    const r = await apiPost("/api/auth/" + mode, {username: user, password: pw, ...(await humanProof())});
     if (r.ok) { $("#ap").value = $("#ap2").value = ""; $("#auth").close(); refresh(); }
     else { let d; try { d = (await r.json()).detail; } catch (e) { d = r.status; } fail(typeof d === "string" ? d : t("common.failed")); }
   } catch (e) {
@@ -2604,13 +3152,12 @@ $("#aForm").onsubmit = async ev => {
   go.disabled = false; setText($("#aState"), "");
 };
 $("#logoutBtn").onclick = async () => {
-  await fetch("/api/auth/logout", {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"});
+  await apiPost("/api/auth/logout", {});
   location.reload();
 };
 $("#pwGo").onclick = async () => {
   const msg = $("#pwMsg");
-  const r = await fetch("/api/auth/password", {method: "POST", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({old: $("#pwOld").value, new: $("#pwNew").value})});
+  const r = await apiPost("/api/auth/password", {old: $("#pwOld").value, new: $("#pwNew").value});
   if (r.ok) { msg.textContent = t("me.pwDone"); msg.className = "msg ok"; $("#pwOld").value = $("#pwNew").value = ""; }
   else { let d; try { d = (await r.json()).detail; } catch (e) { d = r.status; } msg.textContent = typeof d === "string" ? d : t("common.failed"); msg.className = "msg bad"; }
 };
@@ -2626,6 +3173,7 @@ async function refresh() {
     if (S.is_admin) {
       await loadAdmin(); await loadAccounts();
       if (!JB || $("#tab-admin").classList.contains("on")) await loadJobs();
+      if (!EXR || $("#tab-admin").classList.contains("on")) await loadExamples();
       if (!SV || $("#tab-admin").classList.contains("on")) await loadSupervisor();
       if (!SK || ($("#tab-admin").classList.contains("on") && Date.now() - (window._skT || 0) > 30000)) { window._skT = Date.now(); await loadSkill(); }
     }

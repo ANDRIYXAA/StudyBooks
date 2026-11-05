@@ -27,6 +27,7 @@ import re
 import shutil
 import subprocess
 import threading
+import base64
 import time
 import urllib.parse
 import urllib.request
@@ -37,12 +38,21 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 import accounts
+import combine as COMBINE
+import links as LINKS
 import sb
 
 L = sb.L
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 INDEX = Path(__file__).resolve().parent / "web" / "index.html"
+HUB = Path(__file__).resolve().parent / "web" / "hub.html"
+GLASS_JS = Path(__file__).resolve().parent / "web" / "glass.js"
+
+
+def page_text(path: Path) -> str:
+    """A page of the site with the shared script (web/glass.js) put in: the book page and the combined page use the same glass buttons."""
+    return path.read_text(encoding="utf-8").replace("/*__GLASS_JS__*/", GLASS_JS.read_text(encoding="utf-8"))
 N8N_KICK = "http://127.0.0.1:5678/webhook/studybooks-kick"
 PUBLIC = os.environ.get("SB_PUBLIC") == "1"            # the instance behind the Cloudflare tunnel
 MAX_PUBLIC_USERS = int(os.environ.get("SB_MAX_PUBLIC_USERS", "200"))
@@ -136,6 +146,10 @@ def shared_view(sp: sb.Space, st: dict) -> dict:
             for i in s["interactive"]:
                 i.pop("by", None)
                 i["mine"] = True                      # the book's owner may change every page
+            for l in s["links"]:
+                l.pop("by", None)
+                l["mine"] = True                      # ... and remove every link
+            s["combined"] = combined_rows(sp, s["id"], sp.uid, owner=True)
             for d in s["days"]:
                 for e in d["entries"]:
                     e.pop("by", None)
@@ -147,9 +161,12 @@ def shared_view(sp: sb.Space, st: dict) -> dict:
         o = own.get(s["id"], {})
         for i in s["interactive"]:
             i["mine"] = i.pop("by", None) == sp.uid       # the person who added a page may change it
+        for l in s["links"]:
+            l["mine"] = l.pop("by", None) == sp.uid       # ... and remove their own links
         for d in s["days"]:
             for e in d["entries"]:
                 e["mine"] = e.pop("by", None) == sp.uid           # what this person uploaded: they may change its date
+        s["combined"] = combined_rows(main, s["id"], sp.uid)
         shared.append(s | {"making": o.get("making", []), "activity": o.get("activity"), "exams": o.get("exams", []),
                            "refs": o.get("refs", []), "open_refs": o.get("open_refs", []), "targets": []})
     st["subjects"] = shared
@@ -185,13 +202,14 @@ def anon_status(request: Request) -> dict:
         days = [d | {"entries": [{k: v for k, v in e.items() if k not in ("by", "by_name", "with", "mine", "can_undo", "can_edit")}
                                  for e in d["entries"]]} for d in s["days"]]      # who uploaded what: signed-in people only
         inter = [{k: v for k, v in i.items() if k not in ("by", "mine", "can_undo")} for i in s["interactive"]]
+        links = [{k: v for k, v in l.items() if k not in ("by", "mine")} for l in s["links"]]
         subjects.append(s | {"making": [], "activity": None, "targets": [], "refs": [], "open_refs": [], "days": days,
-                             "interactive": inter})
+                             "interactive": inter, "links": links, "combined": combined_rows(sp, s["id"])})
     out = {"ok": True, "anon": True, "participants": participants(), "public": True, "user": {"uid": "", "login": "", "name": None}, "is_admin": False,
            "admin_pending": 0, "subjects": subjects, "auto_activity": None, "queue": [], "failed": [], "recent": [],
            "suggestions": [], "suggest_limits": {}, "usage": {}, "limit_gate": None, "claude": {}, "blocked": None,
            "build_errors": [], "digest_errors": [], "paused": False, "soft_stop": False, "running_here": False,
-           "worker": {"state": "idle"}, "general_refs": [],
+           "worker": {"state": "idle"}, "working": st.get("working"), "general_refs": [],
            "engine": {"name": "claude", "ready": True, "openrouter": {}, "claude": {}}}
     _anon_cache[lang] = (time.time(), out)
     return out
@@ -260,7 +278,8 @@ async def public_guard(request: Request, call_next):
     resp = await call_next(request)
     resp.headers["X-Content-Type-Options"] = "nosniff"
     resp.headers["Referrer-Policy"] = "no-referrer"
-    resp.headers["X-Frame-Options"] = "DENY"
+    # an interactive page may be shown inside the /hub page of this same site, nowhere else
+    resp.headers["X-Frame-Options"] = "SAMEORIGIN" if path.startswith("/i/") else "DENY"
     if path.startswith("/api/"):
         resp.headers.setdefault("Cache-Control", "no-store")
     return resp
@@ -271,7 +290,7 @@ def index():
     headers = {"Cache-Control": "no-store"}
     if PUBLIC:
         headers["Content-Security-Policy"] = PAGE_CSP
-    return HTMLResponse(INDEX.read_text(encoding="utf-8"), headers=headers)
+    return HTMLResponse(page_text(INDEX), headers=headers)
 
 
 # ---------------------------------------------------------------- public side: sign-up, sign-in, human check
@@ -474,7 +493,7 @@ def claude_login(request: Request):
 @app.post("/api/claude/code")
 async def claude_code(request: Request):
     sp = who(request)
-    code = ((await request.json()).get("code") or "").strip()
+    code = ((await json_body(request)).get("code") or "").strip()
     if not code or len(code) > 500 or any(c in code for c in "\r\n"):
         raise HTTPException(400, L("встав код зі сторінки Anthropic", "paste the code from Anthropic's page"))
     with _logins_lock:
@@ -525,7 +544,7 @@ def api_or_models(request: Request):
 @app.post("/api/engine")
 async def api_engine(request: Request):
     sp = who(request)
-    body = await request.json()
+    body = await json_body(request)
     engine = body.get("engine")
     if engine not in ("claude", "openrouter"):
         raise HTTPException(400, L("невідомий двигун", "unknown engine"))
@@ -538,16 +557,179 @@ async def api_engine(request: Request):
         if model != sb.OR_AUTO and models and not any(m["id"] == model for m in models):
             raise HTTPException(400, L("такої моделі немає серед тих, що вміють викликати інструменти", "no such model among those that can call tools"))
         fields["openrouter_model"] = model
+    cur = sp.prof().get("engines_on")
+    if isinstance(cur, list) and cur:           # the "switch between" box is in use: the engine joins the selection
+        on = [e for e in sb.en.ORDER if e in set(cur) | {engine}]
+        fields["engines_on"], fields["engine"] = on, on[0]
     sp.update_profile(blocked=None, blocked_at=None, **fields)
     kick()
     return {"ok": True, "ready": sp.engine_ok()}
+
+
+# ---------------------------------------------------------------- the "switch between" box: Codex, Grok, Gemini
+
+MODEL_RE = re.compile(r"^[A-Za-z0-9_.:/\-]{1,120}$")
+
+
+def _need_engine(name: str):
+    if name not in sb.en.ORDER:
+        raise HTTPException(400, L("невідомий двигун", "unknown engine"))
+    return name
+
+
+@app.post("/api/engines")
+async def api_engines(request: Request):
+    """Which engines are used, in the order of the box (claude, openrouter, codex, grok, gemini). Only engines that are
+    connected can be selected; the first selected one becomes the main engine of the person."""
+    sp = who(request)
+    body = await json_body(request)
+    raw = body.get("on")
+    if not isinstance(raw, list):
+        raise HTTPException(400, L("потрібен список двигунів", "a list of engines is needed"))
+    on = [_need_engine(str(e)) for e in raw]
+    on = [e for e in sb.en.ORDER if e in on]
+    if not on:
+        raise HTTPException(400, L("обери хоча б один двигун", "select at least one engine"))
+    if "codex" in on and sp.uid not in sb.admin_uids():
+        raise HTTPException(403, L("Codex через вхід ChatGPT доступний лише власнику книги", "Codex with a ChatGPT sign-in is for the book's owner only"))
+    missing = [sb.engine_label(e) for e in on if not await run_in_threadpool(sp.engine_connected, e)]
+    if missing:
+        raise HTTPException(400, L("не підключено: ", "not connected: ") + ", ".join(missing))
+    sp.update_profile(engines_on=on, engine=on[0], blocked=None, blocked_at=None)
+    kick()
+    return {"ok": True, "switch": sb.engines_view(sp)}
+
+
+@app.post("/api/engine/key")
+async def api_engine_key(request: Request):
+    """The key of Grok or Gemini: checked against the provider, then kept in a 0600 file (never sent back)."""
+    sp = who(request)
+    now_ = time.time()
+    tries = [t for t in _key_tries.get(sp.uid, []) if now_ - t < 3600]
+    if len(tries) >= 10:
+        raise HTTPException(429, L("забагато спроб, зачекай годину", "too many attempts, wait an hour"))
+    _key_tries[sp.uid] = tries + [now_]
+    body = await json_body(request)
+    engine = str(body.get("engine") or "")
+    if engine not in sb.en.PROVIDERS:
+        raise HTTPException(400, L("невідомий двигун", "unknown engine"))
+    try:
+        models = await run_in_threadpool(sb.oa_set_key, sp, engine, str(body.get("key") or ""))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except (sb.AuthError, sb.TransientError) as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "models": models, "model": sp.engine_model(engine), "switch": sb.engines_view(sp)}
+
+
+@app.post("/api/engine/key/remove")
+async def api_engine_key_remove(request: Request):
+    sp = who(request)
+    body = await json_body(request)
+    engine = str(body.get("engine") or "")
+    if engine not in sb.en.PROVIDERS:
+        raise HTTPException(400, L("невідомий двигун", "unknown engine"))
+    sp.engine_key_file(engine).unlink(missing_ok=True)
+    on = [e for e in sp.engines_on() if e != engine]
+    sp.update_profile(engines_on=on or None, engine=on[0] if on else None)        # nothing selected: back to the default engine
+    return {"ok": True, "switch": sb.engines_view(sp)}
+
+
+@app.get("/api/engine/models/{engine}")
+async def api_engine_models(request: Request, engine: str):
+    sp = who(request)
+    if engine not in sb.en.PROVIDERS or not sp.engine_key(engine):
+        raise HTTPException(404, L("ключ не задано", "no key set"))
+    try:
+        return {"models": await run_in_threadpool(sb.oa_models, engine, sp.engine_key(engine))}
+    except (sb.AuthError, sb.TransientError) as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/engine/model")
+async def api_engine_model(request: Request):
+    """The model of Grok, Gemini or Codex (Codex: also the effort); "" for Codex = the CLI's own default."""
+    sp = who(request)
+    body = await json_body(request)
+    engine, model = str(body.get("engine") or ""), str(body.get("model") or "").strip()
+    if engine not in ("grok", "gemini", "codex"):
+        raise HTTPException(400, L("невідомий двигун", "unknown engine"))
+    if (model or engine != "codex") and not MODEL_RE.match(model):
+        raise HTTPException(400, L("некоректна назва моделі", "not a valid model name"))
+    fields = {f"{engine}_model": model or None}
+    if engine == "codex":
+        eff = str(body.get("effort") or "")
+        if eff and eff not in sb.en.CODEX_EFFORTS:
+            raise HTTPException(400, L("невідомий рівень effort", "unknown effort level"))
+        fields["codex_effort"] = eff or None
+    sp.update_profile(**fields)
+    return {"ok": True, "switch": sb.engines_view(sp)}
+
+
+@app.post("/api/codex/login")
+def codex_login(request: Request):
+    """Start the Codex sign-in with a one-time code (`codex login --device-auth`, the unmodified CLI): the owner opens the
+    link, enters the code, and Codex stores its own credentials. Owner only (see the note at the engines in sb.py)."""
+    sp = need_admin(request)
+    codex = sb.codex_bin()
+    if not codex.exists():
+        raise HTTPException(503, L("Codex не встановлений на сервері", "Codex is not installed on the server"))
+    key = "codex:" + sp.uid
+    with _logins_lock:
+        _drop_login(key)
+        (sp.root / "codex").mkdir(exist_ok=True)
+        proc = subprocess.Popen([str(codex), "login", "--device-auth"], env=sp.codex_env(), cwd=str(sp.root),
+                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        buf = bytearray()
+        threading.Thread(target=_reader, args=(proc, buf), daemon=True).start()
+        _logins[key] = {"proc": proc, "buf": buf, "t": time.time()}
+    url = code = None
+    text = ""
+    for _ in range(150):
+        url, code, text = sb.en.parse_login(bytes(buf).decode("utf-8", "replace"))
+        if (url and code) or proc.poll() is not None:
+            break
+        time.sleep(0.1)
+    if not url:
+        with _logins_lock:
+            _drop_login(key)
+        raise HTTPException(500, L("Codex не видав посилання для входу: ", "Codex gave no sign-in link: ") + text[-300:])
+    return {"ok": True, "url": url, "code": code, "text": text[-300:] if not code else ""}
+
+
+@app.get("/api/codex/status")
+def codex_login_status(request: Request):
+    """The sign-in goes on while the process runs; when it ends, the status says if Codex is signed in now."""
+    sp = need_admin(request)
+    with _logins_lock:
+        l = _logins.get("codex:" + sp.uid)
+    running = bool(l and l["proc"].poll() is None)
+    if l and not running:
+        with _logins_lock:
+            _drop_login("codex:" + sp.uid)
+    st = sp.codex_status(fresh=not running)
+    if st.get("loggedIn") and not running:
+        sp.update_profile(blocked=None, blocked_at=None)
+    return {"pending": running, "loggedIn": bool(st.get("loggedIn")), "text": st.get("text")}
+
+
+@app.post("/api/codex/logout")
+def codex_logout(request: Request):
+    sp = need_admin(request)
+    codex = sb.codex_bin()
+    if codex.exists():
+        subprocess.run([str(codex), "logout"], env=sp.codex_env(), capture_output=True, timeout=60, stdin=subprocess.DEVNULL)
+    sp.forget_codex_status()
+    on = [e for e in sp.engines_on() if e != "codex"]
+    sp.update_profile(engines_on=on or None, engine=on[0] if on else None)        # nothing selected: back to the default engine
+    return {"ok": True, "switch": sb.engines_view(sp)}
 
 
 @app.post("/api/claude/settings")
 async def api_claude_settings(request: Request):
     """Model and effort for this person's Claude Code runs; "" = the server default. Applies from the next call."""
     sp = who(request)
-    body = await request.json()
+    body = await json_body(request)
     model, effort = str(body.get("model") or ""), str(body.get("effort") or "")
     if model and model not in sb.CLAUDE_MODELS:
         raise HTTPException(400, L("невідома модель", "unknown model"))
@@ -584,8 +766,8 @@ async def api_turbo(request: Request):
     the flag before each chunk, so it also speeds up the upload that is running now. OpenRouter only: the Claude Code
     limits are a different matter."""
     sp = who(request)
-    body = await request.json()
-    on = bool((body if isinstance(body, dict) else {}).get("on"))
+    body = await json_body(request)
+    on = bool(body.get("on"))
     if on and sp.engine() != "openrouter":
         raise HTTPException(409, L("Турбо працює лише з OpenRouter", "Turbo mode works with OpenRouter only"))
     sp.update_profile(turbo=True if on else None)
@@ -619,7 +801,7 @@ async def api_or_key(request: Request):
     if len(tries) >= 10:
         raise HTTPException(429, L("забагато спроб, зачекай годину", "too many attempts, wait an hour"))
     _key_tries[sp.uid] = tries + [now_]
-    key = str((await request.json()).get("key") or "").strip()
+    key = str((await json_body(request)).get("key") or "").strip()
     try:
         info = await run_in_threadpool(sb.or_set_key, sp, key)
     except ValueError as e:
@@ -652,7 +834,7 @@ def api_or_free(request: Request):
 @app.post("/api/openrouter/free")
 async def api_or_free_save(request: Request):
     sp = who(request)
-    body = await request.json()
+    body = await json_body(request)
     known = {m["id"] for m in await run_in_threadpool(sb.or_free_ranked, sp)}
     order = [str(x) for x in (body.get("order") or []) if str(x) in known]
     exclude = [str(x) for x in (body.get("exclude") or []) if str(x) in known]
@@ -676,6 +858,51 @@ def api_or_key_remove(request: Request):
     sp = who(request)
     sp.or_key_file.unlink(missing_ok=True)
     return {"ok": True}
+
+
+_donate_tries = {}     # uid -> [timestamps] of nickname lookups: the form is not a way to list who has an account
+
+
+@app.post("/api/openrouter/donate")
+async def api_or_donate(request: Request):
+    """"Donor to <nickname>": the person lets ONE named other person use their free OpenRouter requests (free models
+    only, up to a daily cap, only while that person's own key is missing or used up). The nickname is typed by hand;
+    no list of people exists anywhere. The key itself is never shown to anybody."""
+    sp = who(request)
+    now_ = time.time()
+    tries = [t for t in _donate_tries.get(sp.uid, []) if now_ - t < 3600]
+    if len(tries) >= 20:
+        raise HTTPException(429, L("забагато спроб, зачекай годину", "too many attempts, wait an hour"))
+    _donate_tries[sp.uid] = tries + [now_]
+    body = await json_body(request)
+    if not sp.or_key():
+        raise HTTPException(409, L("Спершу збережи свій ключ OpenRouter: віддавати нічого", "Save your own OpenRouter key first: there is nothing to give yet"))
+    raw_cap = body.get("cap")
+    try:
+        cap = sb.DONATE_DEFAULT if raw_cap is None or raw_cap == "" else int(raw_cap)     # 0 is a wrong cap, not "unset"
+    except (TypeError, ValueError):
+        raise HTTPException(400, L("ліміт на добу має бути числом", "the daily cap must be a number"))
+    if not 1 <= cap <= sb.DONATE_MAX:
+        raise HTTPException(400, L(f"ліміт на добу — від 1 до {sb.DONATE_MAX}", f"the daily cap is from 1 to {sb.DONATE_MAX}"))
+    uid = await run_in_threadpool(sb.uid_by_nick, str(body.get("nick") or ""))
+    if not uid or uid == sp.uid:
+        raise HTTPException(404, L("Такого учасника не знайдено (або це ти сам). Введи нікнейм точно як на сайті.",
+                                   "No such participant (or it is you). Type the nickname exactly as it appears on the site."))
+    cur = sp.prof().get("or_donate") or {}
+    if uid not in cur and len(cur) >= sb.DONATE_MAX_PEOPLE:
+        raise HTTPException(409, L(f"Не більше {sb.DONATE_MAX_PEOPLE} людей одночасно", f"At most {sb.DONATE_MAX_PEOPLE} people at a time"))
+    sb.donate_set(sp, uid, cap)
+    kick()
+    return {"ok": True, "donate": sb.donate_view(sp)}
+
+
+@app.post("/api/openrouter/donate/remove")
+async def api_or_donate_remove(request: Request):
+    sp = who(request)
+    body = await json_body(request)
+    if not sb.donate_remove(sp, str(body.get("id") or "")):
+        raise HTTPException(404, L("такого запису немає", "no such entry"))
+    return {"ok": True, "donate": sb.donate_view(sp)}
 
 
 # ---------------------------------------------------------------- uploads and requests
@@ -870,8 +1097,7 @@ async def api_entry_date(request: Request):
     """Move one entry to another class day (wrong date at upload, or a supplement for an earlier class)."""
     sp = who(request)
     lib = sb.shared_target(sp)        # entries live in the shared book; the owner moves any, others only their own
-    body = await request.json()
-    body = body if isinstance(body, dict) else {}
+    body = await json_body(request)
     subject, topic, entry = str(body.get("subject") or ""), str(body.get("topic") or ""), str(body.get("entry") or "")
     if not any(s["id"] == subject for s in lib.load_syllabus()["subjects"]):
         raise HTTPException(404, L("невідомий предмет", "unknown subject"))
@@ -893,10 +1119,154 @@ async def api_entry_date(request: Request):
     return {"ok": True, "date": day}
 
 
+_preview_hits = {}          # person -> times of the page reads of the last minute (preview and "subject chosen")
+
+
+@app.post("/api/link")
+async def api_link(request: Request):
+    """Add links (videos, sites) to the shared book. Anyone signed in may add links. Without a subject each address becomes
+    one request: the worker reads the title of the page and the model files the link under the right subject and topic.
+    With a subject the link is in the list at once (no model), and its request lets the model move it into the book later."""
+    sp = who(request)
+    lib = sb.shared_target(sp)
+    body = await json_body(request)
+    raw = body.get("urls") if isinstance(body.get("urls"), list) else [body.get("url") or body.get("urls") or ""]
+    urls = [part for x in raw for part in str(x or "").split()]
+    if not urls:
+        raise HTTPException(400, L("встав хоча б одне посилання", "paste at least one link"))
+    if len(urls) > sb.LINK_BATCH:
+        raise HTTPException(400, L(f"за раз не більше {sb.LINK_BATCH} посилань", f"at most {sb.LINK_BATCH} links at once"))
+    subject = str(body.get("subject") or "")
+    if subject and not any(s["id"] == subject for s in lib.load_syllabus()["subjects"]):
+        raise HTTPException(404, L("невідомий предмет", "unknown subject"))
+    note = re.sub(r"\s+", " ", re.sub(r"[\x00-\x1f\x7f]+", " ", str(body.get("note") or ""))).strip()[:300]
+    waiting = [x for x in (sb.read_json(p, {}) or {} for p in sp.d["requests"].glob("*.json")) if x.get("kind") == "link"]
+    if len(waiting) + len(urls) > sb.LINK_WAITING_MAX:
+        raise HTTPException(429, L(f"у черзі вже {len(waiting)} посилань (найбільше {sb.LINK_WAITING_MAX}): дочекайся, поки їх оброблять",
+                                   f"{len(waiting)} links are already in the queue (at most {sb.LINK_WAITING_MAX}): wait until they are done"))
+    hints = body.get("titles") if isinstance(body.get("titles"), dict) else {}      # names the page showed on paste: only a label
+    if subject:
+        # A subject was chosen: each link goes into the list under the book AT ONCE, without a model (the program reads the
+        # page). It is not in the PDF book yet: a request in the queue lets the model place it as soon as the model is
+        # available (the person's engine works), then it enters the chapter of its topic.
+        now_t = time.time()
+        hits = [t for t in _preview_hits.get(sp.uid, []) if now_t - t < 60]
+        if len(hits) + len(urls) > 30:
+            raise HTTPException(429, L("забагато запитів: зачекай хвилину", "too many requests: wait a minute"))
+        _preview_hits[sp.uid] = hits + [now_t] * len(urls)
+        todo, skipped, seen = [], [], {x.get("url") for x in waiting}
+        for r in urls:
+            try:
+                u, full = LINKS.clean_pair(r)
+            except LINKS.LinkError as e:
+                skipped.append({"url": r[:80], "reason": L(*e.args)})
+                continue
+            if u in seen or sb.known_link(lib, u):
+                skipped.append({"url": u[:80], "reason": L("це посилання вже є в книзі або чекає в черзі", "this link is already in the book or waits in the queue")})
+                continue
+            seen.add(u)
+            todo.append((u, full if full != u else ""))
+        added = 0
+        if todo:
+            infos = await run_in_threadpool(sb.read_links, todo)
+            for info in infos:
+                try:
+                    lid = sb.add_link_plain(sp, lib, subject, info)
+                except sb.PermanentError as e:
+                    skipped.append({"url": info["url"][:80], "reason": str(e)})
+                    continue
+                if lid is None:
+                    skipped.append({"url": info["url"][:80], "reason": L("це посилання вже є в книзі", "this link is already in the book")})
+                    continue
+                rid = sb.new_id()
+                sb.write_json(sp.d["requests"] / f"{rid}.json", {
+                    "id": rid, "kind": "link", "url": info["url"], "url_full": "", "subject": subject, "link_id": lid, "text": note,
+                    "created": sb.now_iso(), "label": LINKS.clean_text(hints.get(info["url"]) or info["title"], 80) or LINKS.short(info["url"])})
+                added += 1
+        if added:
+            kick()
+        return {"ok": True, "added": added, "queued": added, "skipped": skipped}
+    queued, skipped, seen = 0, [], {x.get("url") for x in waiting}
+    for r in urls:
+        try:
+            u, full = LINKS.clean_pair(r)
+        except LINKS.LinkError as e:
+            skipped.append({"url": r[:80], "reason": L(*e.args)})
+            continue
+        if u in seen:
+            skipped.append({"url": u[:80], "reason": L("це посилання вже чекає в черзі", "this link is already waiting in the queue")})
+            continue
+        if sb.known_link(lib, u):
+            skipped.append({"url": u[:80], "reason": L("це посилання вже є в книзі", "this link is already in the book")})
+            continue
+        seen.add(u)
+        rid = sb.new_id()
+        hint = LINKS.clean_text(hints.get(u) or hints.get(r), 80)
+        sb.write_json(sp.d["requests"] / f"{rid}.json", {"id": rid, "kind": "link", "url": u, "url_full": full if full != u else "",
+                                                          "subject": subject, "text": note, "created": sb.now_iso(),
+                                                          "label": hint or LINKS.short(u)})
+        queued += 1
+    if queued:
+        kick()
+    return {"ok": True, "queued": queued, "skipped": skipped}
+
+
+@app.post("/api/link/preview")
+async def api_link_preview(request: Request):
+    """The name of the page behind an address, shown under the text box while the person pastes (like the link cards of
+    other online tools). Read with the same safe fetch as the worker; 30 a minute for a person."""
+    sp = who(request)
+    body = await json_body(request)
+    now = time.time()
+    hits = [t for t in _preview_hits.get(sp.uid, []) if now - t < 60]
+    if len(hits) >= 30:
+        raise HTTPException(429, L("забагато запитів: зачекай хвилину", "too many requests: wait a minute"))
+    _preview_hits[sp.uid] = hits + [now]
+    try:
+        u, _ = LINKS.clean_pair(str(body.get("url") or ""))
+    except LINKS.LinkError as e:
+        raise HTTPException(400, L(*e.args))
+    info = await run_in_threadpool(LINKS.fetch_meta, u)
+    thumb = await run_in_threadpool(sb.link_thumb, info.get("image"))
+    return {"ok": True, "url": u, "host": LINKS.host_of(u), "title": info["title"], "site": info["site"], "kind": info["kind"],
+            "read": info["ok"], "known": bool(sb.known_link(sb.shared_target(sp), u)),
+            "thumb": "data:image/jpeg;base64," + base64.b64encode(thumb).decode() if thumb else ""}
+
+
+@app.get("/api/link/thumb/{subject}/{lid}")
+def api_link_thumb(request: Request, subject: str, lid: str):
+    """The thumbnail picture of a link (a small JPEG made by the worker). Readable like the books: strangers see the main book's."""
+    sp = viewer(request)
+    if not re.fullmatch(r"[a-z0-9-]+", subject) or not re.fullmatch(r"[A-Za-z0-9_-]+", lid):
+        raise HTTPException(404)
+    f = sb.links_dir(sp, subject) / f"{lid}.jpg"
+    if not f.is_file():
+        raise HTTPException(404)
+    return FileResponse(f, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400", "X-Content-Type-Options": "nosniff"})
+
+
+@app.post("/api/link/delete")
+async def api_link_delete(request: Request):
+    """Remove a link from the book. The book's owner removes any, others only the ones they added."""
+    sp = who(request)
+    lib = sb.shared_target(sp)
+    body = await json_body(request)
+    subject, lid = str(body.get("subject") or ""), str(body.get("id") or "")
+    f = sb.links_dir(lib, subject) / f"{lid}.json" if sb.SAFE_ID.match(subject) and sb.SAFE_ID.match(lid) and ".." not in subject + lid else None
+    m = sb.read_json(f, None) if f else None
+    if not m:
+        raise HTTPException(404, L("такого посилання немає", "no such link"))
+    if lib is not sp and m.get("by") != sp.uid:
+        raise HTTPException(403, L("посилання видаляє лише той, хто його додав, і власник книги",
+                                   "only the person who added the link and the book's owner can remove it"))
+    sb.delete_link(lib, subject, lid)
+    return {"ok": True}
+
+
 @app.post("/api/request")
 async def api_request(request: Request):
     sp = who(request)
-    body = await request.json()
+    body = await json_body(request)
     kind, subject, text = body.get("kind"), body.get("subject", ""), (body.get("text") or "").strip()
     if kind not in ("explain", "interactive", "ipage_edit", "entry_edit", "book_edit") or not subject or not text:
         raise HTTPException(400, L("потрібні тип, предмет і текст запиту", "type, subject and request text are required"))
@@ -959,8 +1329,7 @@ async def api_request(request: Request):
 async def api_ipage_undo(request: Request):
     """Bring back the version of an interactive page from before its last change on request (one step)."""
     sp = who(request)
-    body = await request.json()
-    body = body if isinstance(body, dict) else {}
+    body = await json_body(request)
     subject, stem = str(body.get("subject") or ""), str(body.get("stem") or "")
     tgt = sb.shared_target(sp)
     f, meta = sb.ipage_file(tgt, subject, stem)
@@ -984,8 +1353,7 @@ async def api_ipage_undo(request: Request):
 async def api_entry_undo(request: Request):
     """Bring back the text of a clean-book section from before its last change on request (one step; again = redo)."""
     sp = who(request)
-    body = await request.json()
-    body = body if isinstance(body, dict) else {}
+    body = await json_body(request)
     r = sb.undo_entry_edit(sp, str(body.get("subject") or ""), str(body.get("topic") or ""), str(body.get("entry") or ""))
     if not r["ok"]:
         raise HTTPException(r["code"], r["error"])
@@ -1002,7 +1370,7 @@ def api_request_run(request: Request, rid: str):
         raise HTTPException(400)
     r = sb.read_json(sp.d["requests"] / f"{rid}.json", None)
     upload = (sp.d["inbox"] / rid / "submission.json").exists()
-    if not upload and (not isinstance(r, dict) or r.get("kind") not in ("interactive", "explain", "ipage_edit", "entry_edit", "book_edit")):
+    if not upload and (not isinstance(r, dict) or r.get("kind") not in ("interactive", "explain", "ipage_edit", "entry_edit", "book_edit", "link")):
         raise HTTPException(404, L("такого запиту в черзі немає", "no such request in the queue"))
     if sp.paused():
         sp.update_profile(run_now=sorted(sp.run_now_ids() | {rid}))
@@ -1015,8 +1383,8 @@ async def api_queue_delete(request: Request):
     """Delete a waiting upload or request. If the worker is busy with it, the model call is stopped within seconds and
     the worker removes the item (`stopping`); otherwise it is gone at once."""
     sp = who(request)
-    body = await request.json()
-    r = sb.delete_queue_item(sp, str((body if isinstance(body, dict) else {}).get("id") or ""))
+    body = await json_body(request)
+    r = sb.delete_queue_item(sp, str(body.get("id") or ""))
     if not r["ok"]:
         raise HTTPException(404, r["error"])
     kick()
@@ -1027,8 +1395,7 @@ async def api_queue_delete(request: Request):
 async def api_queue_file_delete(request: Request):
     """Take one file out of a waiting upload (`id` = the upload, `file` = the stored name from `file_links`)."""
     sp = who(request)
-    body = await request.json()
-    body = body if isinstance(body, dict) else {}
+    body = await json_body(request)
     r = sb.delete_upload_file(sp, str(body.get("id") or ""), str(body.get("file") or ""))
     if not r["ok"]:
         raise HTTPException(409 if r.get("busy") else 404, r["error"])
@@ -1063,9 +1430,9 @@ def api_upload_file(request: Request, sid: str, idx: int):
 @app.post("/api/exam")
 async def api_exam(request: Request):
     sp = who(request)
-    body = await request.json()
+    body = await json_body(request)
     try:
-        rid = sb.create_exam(sp, body if isinstance(body, dict) else {})
+        rid = sb.create_exam(sp, body)
     except sb.ExamError as e:
         raise HTTPException(e.code, e.msg)
     kick()
@@ -1075,8 +1442,7 @@ async def api_exam(request: Request):
 @app.post("/api/exam/delete")
 async def api_exam_delete(request: Request):
     sp = who(request)
-    body = await request.json()
-    body = body if isinstance(body, dict) else {}
+    body = await json_body(request)
     try:
         sb.delete_exam(sp, str(body.get("subject") or ""), str(body.get("id") or ""))
     except sb.ExamError as e:
@@ -1157,15 +1523,36 @@ def api_jobs(request: Request):
 @app.post("/api/admin/job/{jid}/{action}")
 async def api_job_action(request: Request, jid: str, action: str):
     need_admin(request)
-    if action not in ("pause", "resume", "cancel", "skip", "retry", "undo", "archive"):
+    if action not in ("pause", "resume", "cancel", "skip", "retry", "undo", "archive", "drop"):
         raise HTTPException(400)
-    step = (await json_body(request)).get("step")
+    body = await json_body(request)
+    step, qid = body.get("step"), body.get("qid")
     try:
-        msg = await run_in_threadpool(sb.job_action, jid, action, str(step) if step else None)
+        msg = await run_in_threadpool(sb.job_action, jid, action, str(step) if step else None, str(qid) if qid else None)
     except sb.JobError as e:
         raise HTTPException(e.code, e.msg)
     kick()
     return {"ok": True, "msg": msg}
+
+
+@app.get("/api/admin/examples")
+def api_examples(request: Request):
+    """The examples runs of the Admin tab: the sections of the books of before are made only when the admin starts a run."""
+    need_admin(request)
+    return sb.examples_runs_view()
+
+
+@app.post("/api/admin/examples/{subject}/{action}")
+async def api_examples_action(request: Request, subject: str, action: str):
+    need_admin(request)
+    if not re.fullmatch(r"[a-z0-9-]+", subject) or action not in ("start", "pause", "resume", "stop", "clear"):
+        raise HTTPException(400)
+    try:
+        await run_in_threadpool(sb.examples_run_action, subject, action)
+    except sb.ExamplesError as e:
+        raise HTTPException(400, str(e))
+    kick()
+    return {"ok": True}
 
 
 @app.post("/api/admin/accounts/{name}/{action}")
@@ -1189,8 +1576,8 @@ def api_account_action(request: Request, name: str, action: str):
 async def api_suggest(request: Request):
     sp = who(request)
     try:
-        body = await request.json()
-        sid = sb.create_suggestion(sp, body if isinstance(body, dict) else {})
+        body = await json_body(request)
+        sid = sb.create_suggestion(sp, body)
     except sb.SuggestError as e:
         raise HTTPException(e.code, e.msg)
     kick()
@@ -1214,7 +1601,7 @@ def api_merge_list(request: Request):
 @app.post("/api/admin/merge/state")
 async def api_merge_state(request: Request):
     need_admin(request)
-    body = await request.json()
+    body = await json_body(request)
     st = sb.merge_state()
     if "paused" in body:
         st["paused"] = bool(body["paused"])
@@ -1231,7 +1618,7 @@ async def api_merge_state(request: Request):
 async def api_merge_action(request: Request, cid: str, action: str):
     sp = need_admin(request)
     try:
-        note = (await request.json()).get("note", "")
+        note = (await json_body(request)).get("note", "")
     except Exception:
         note = ""
     r = sb.merge_action(sp, cid, action, note)
@@ -1247,6 +1634,17 @@ def api_retry(request: Request, name: str):
         raise HTTPException(400)
     r = sb.retry_failed(sp, name)
     kick()
+    return r
+
+
+@app.post("/api/queue/failed/delete")
+async def api_queue_failed_delete(request: Request):
+    """Delete an item that failed for good (the "failed" list under the queue)."""
+    sp = who(request)
+    body = await json_body(request)
+    r = sb.delete_failed(sp, str(body.get("id") or ""))
+    if not r["ok"]:
+        raise HTTPException(404, r["error"])
     return r
 
 
@@ -1290,6 +1688,36 @@ def exam_pdf(request: Request, subject: str, eid: str, which: str):
                         headers={"Cache-Control": "no-store"})
 
 
+# Added to every interactive page when it is served (never written into the stored file):
+#  * the combined page has ONE language switch: it sends {sbLang: "uk"|"en"} and this listener presses the page's own EN / УКР button;
+#  * inside a combined page (?embed=1) the page uses the whole window: a centred column with a max-width is widened, but drawings
+#    (svg with a viewBox, canvas) keep their natural size, otherwise the text inside them grows with the window.
+BRIDGE_JS = ("addEventListener('message',function(e){var d=e.data;if(e.source!==parent||!d||typeof d!=='object'||(d.sbLang!=='uk'&&d.sbLang!=='en'))return;"
+             "var t=d.sbLang==='uk'?'УКР':'EN',bs=document.querySelectorAll('button,[role=button]'),b=null;"
+             "for(var i=0;i<bs.length;i++){var x=bs[i];if(x.getAttribute('data-lang')===d.sbLang||x.textContent.trim()===t){b=x;break}}"
+             "if(b&&b.getAttribute('aria-pressed')!=='true')b.click()});")
+WIDEN_JS = ("function sbWiden(){var vw=innerWidth,q=[[document.body,0]];while(q.length){var a=q.shift(),el=a[0],m=getComputedStyle(el).maxWidth;"
+            "if(m!=='none'&&parseFloat(m)<vw*0.98)el.style.setProperty('max-width','none','important');"
+            "if(a[1]<2)for(var i=0;i<el.children.length;i++){var c=el.children[i];if(c.tagName!=='SCRIPT'&&c.tagName!=='STYLE')q.push([c,a[1]+1])}}}"
+            "function sbHideSwitch(){var bs=document.querySelectorAll('button,[role=button]'),en=null,uk=null;"
+            "for(var i=0;i<bs.length;i++){var x=bs[i],l=x.getAttribute('data-lang'),t=x.textContent.trim();if(l==='en'||t==='EN')en=x;if(l==='uk'||t==='УКР')uk=x}"
+            "if(!en||!uk)return;var p=en.parentElement;while(p&&!p.contains(uk))p=p.parentElement;"
+            "if(p&&p!==document.body&&p.children.length===2)p.style.setProperty('display','none','important');"
+            "else{en.style.setProperty('display','none','important');uk.style.setProperty('display','none','important')}}"
+            "function sbCap(){var s=document.querySelectorAll('svg'),c=document.querySelectorAll('canvas'),d=window.devicePixelRatio||1,i,v,m;"
+            "for(i=0;i<s.length;i++){v=s[i].viewBox&&s[i].viewBox.baseVal;if(v&&v.width>0){m=v.width>=300?v.width:700;"
+            "s[i].style.setProperty('max-width',Math.round(m)+'px','important');s[i].style.setProperty('height','auto');"
+            "s[i].style.setProperty('margin-left','auto');s[i].style.setProperty('margin-right','auto');"
+            "if(getComputedStyle(s[i]).display==='inline')s[i].style.setProperty('display','block')}}"
+            "for(i=0;i<c.length;i++)if(c[i].width>0)c[i].style.setProperty('max-width',Math.ceil(c[i].width/d)+'px','important')}"
+            "function sbEmbed(){sbWiden();sbCap();sbHideSwitch()}"
+            "addEventListener('load',sbEmbed);setTimeout(sbEmbed,300);addEventListener('resize',sbWiden);")
+
+
+def page_bridge(embed):
+    return "<script>(function(){" + BRIDGE_JS + (WIDEN_JS if embed else "") + "})();</script>"
+
+
 @app.get("/i/{subject}/{name}.html")
 def interactive(request: Request, subject: str, name: str):
     sp = viewer(request)
@@ -1300,10 +1728,109 @@ def interactive(request: Request, subject: str, name: str):
         raise HTTPException(404)
     # Pages may be edited from other people's suggestions: run them in an opaque origin with no network, so
     # even a page that slipped a script past the checks can neither call /api/* nor send anything out.
-    return FileResponse(f, media_type="text/html; charset=utf-8", headers={
+    html = f.read_text(encoding="utf-8", errors="replace")
+    snippet = page_bridge(request.query_params.get("embed") == "1")      # added when served; the stored file is not touched
+    i = html.lower().rfind("</body>")
+    html = html[:i] + snippet + html[i:] if i >= 0 else html + snippet
+    return HTMLResponse(html, headers={
         "Content-Security-Policy": "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; "
                                    "style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; "
-                                   "form-action 'none'; base-uri 'none'",
+                                   "form-action 'none'; base-uri 'none'; frame-ancestors 'self'",
         # A page changes in place on "Edit": without this a browser keeps showing the version it fetched before the change.
         "Cache-Control": "no-store",
         "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer"})
+
+
+HUB_CSP = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-src 'self'; connect-src 'self'; img-src data:; "
+           "base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+
+
+def combined_rows(lib, sid, uid=None, owner=False):
+    """The combined pages of one subject for the status: no raw uid goes out, only `mine` and `can_delete`."""
+    idir = lib.d["interactive"] / sid
+    sets = COMBINE.listing(idir)
+    pages = sb.interactive_pages(lib, sid) if sets else []
+    rows = []
+    for c in sorted(sets, key=lambda c: (COMBINE.first_rank(c, pages), c.get("created") or "")):      # the order of the study material
+        mine = bool(uid) and c.get("by") == uid
+        rows.append({"id": c["id"], "title": c["title"], "n": len(c["parts"]), "parts": c["parts"], "url": f"/c/{sid}/{c['id']}",
+                     "added": c.get("created"), "mine": mine, "can_delete": bool(owner or mine),
+                     "can_add": bool(uid)})          # anyone signed in may add pages to a set; strangers (no uid) may not
+    return rows
+
+
+@app.get("/c/{subject}/{cid}", response_class=HTMLResponse)
+def combined_page(request: Request, subject: str, cid: str):
+    """A combined page: the menu of the chosen pages of ONE subject, the picked page opens below in a sandboxed frame."""
+    sp = viewer(request)
+    if not re.fullmatch(r"[a-z0-9-]+", subject):
+        raise HTTPException(404)
+    s = sb.find_subject(sp.load_syllabus(), subject)
+    idir = sp.d["interactive"] / subject
+    combo = COMBINE.get(idir, cid) if s else None
+    if not combo:
+        raise HTTPException(404, L("такої зведеної сторінки немає", "no such combined page"))
+    data = {"subject": {"id": s["id"], "title": s["title"], "page_title": combo["title"], "id_c": combo["id"],
+                        "groups": COMBINE.view(combo, sb.interactive_pages(sp, subject))}}
+    js = json.dumps(data, ensure_ascii=True).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+    return HTMLResponse(page_text(HUB).replace("__DATA__", js),
+                        headers={"Cache-Control": "no-store", "Content-Security-Policy": HUB_CSP,
+                                 "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer"})
+
+
+@app.post("/api/combine")
+async def api_combine(request: Request):
+    """Combine chosen interactive pages of ONE subject into one page with a menu. The pages stay as they are."""
+    sp = who(request)
+    lib = sb.shared_target(sp)
+    body = await json_body(request)
+    subject = str(body.get("subject") or "")
+    if not any(s["id"] == subject for s in lib.load_syllabus()["subjects"]):
+        raise HTTPException(404, L("невідомий предмет", "unknown subject"))
+    try:
+        rec = COMBINE.create(lib.d["interactive"] / subject, body.get("title"), body.get("stems"), sp.uid)
+    except COMBINE.CombineError as e:
+        raise HTTPException(400, L(*e.args))
+    return {"ok": True, "id": rec["id"], "url": f"/c/{subject}/{rec['id']}"}
+
+
+@app.post("/api/combine/add")
+async def api_combine_add(request: Request):
+    """Add pages of the same subject to an existing combined page. Every signed-in person may do it (the book is shared and
+    the owner may use the site as a public account): it only adds pages the book already has. Deleting a set stays with
+    the book's owner and the person who made it."""
+    sp = who(request)
+    lib = sb.shared_target(sp)
+    body = await json_body(request)
+    subject, cid = str(body.get("subject") or ""), str(body.get("id") or "")
+    if not re.fullmatch(r"[a-z0-9-]+", subject):
+        raise HTTPException(404)
+    idir = lib.d["interactive"] / subject
+    combo = COMBINE.get(idir, cid)
+    if not combo:
+        raise HTTPException(404, L("такої зведеної сторінки немає", "no such combined page"))
+    try:
+        rec = COMBINE.add(idir, cid, body.get("stems"))
+    except COMBINE.CombineError as e:
+        raise HTTPException(400, L(*e.args))
+    return {"ok": True, "id": cid, "url": f"/c/{subject}/{cid}", "n": len(rec["parts"])}
+
+
+@app.post("/api/combine/delete")
+async def api_combine_delete(request: Request):
+    """Remove a combined page (its pages stay). The book's owner removes any, others only their own."""
+    sp = who(request)
+    lib = sb.shared_target(sp)
+    body = await json_body(request)
+    subject, cid = str(body.get("subject") or ""), str(body.get("id") or "")
+    if not re.fullmatch(r"[a-z0-9-]+", subject):
+        raise HTTPException(404)
+    idir = lib.d["interactive"] / subject
+    combo = COMBINE.get(idir, cid)
+    if not combo:
+        raise HTTPException(404, L("такої зведеної сторінки немає", "no such combined page"))
+    if lib is not sp and combo.get("by") != sp.uid:
+        raise HTTPException(403, L("видаляє лише той, хто її створив, і власник книги",
+                                   "only the person who made it and the book's owner can delete it"))
+    COMBINE.delete(idir, cid)
+    return {"ok": True}
