@@ -20,7 +20,8 @@ _LIMIT = re.compile(r"usage limit|rate[- ]?limit|\b429\b|quota|too many requests
                     r"try again|overloaded|\b529\b|capacity|resource[_ ]exhausted|exceeded your|out of (?:extra )?usage|credits? (?:have )?run out|"
                     r"insufficient (?:credit|balance|funds)", re.I)
 _AUTH = re.compile(r"not logged in|log ?in required|please (?:log ?in|sign ?in)|sign ?in again|unauthori[sz]ed|\b401\b|invalid api key|"
-                   r"api key (?:not valid|invalid)|incorrect api key|authentication|token (?:has )?expired|credentials?", re.I)
+                   r"api key (?:not valid|invalid)|incorrect api key|authentication|token (?:has )?expired|credentials?|"
+                   r"gemini code assist|antigravity|ineligible", re.I)
 
 
 def classify(text):

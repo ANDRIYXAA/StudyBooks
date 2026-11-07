@@ -138,6 +138,8 @@ description: How to add study material (photos of the board, slides, notes, exer
 - [owner] THE TEXT AND THE FORMULAS OF AN EXAMPLE ARE NOT CHANGED. Move the text to the part where it belongs, never rewrite it. Copy every formula character for character, also when it looks wrong.
 - [owner] CHECK looks for small errors: a missing symbol, a wrong sign, a wrong order of terms or steps. Recompute before you write. Say what looks wrong and what it should be. The formula in the text stays as it is printed.
 - [owner] The diagrams and graphs of an example are redrawn as clean vector drawings with the same labels, directions, proportions and values. A program compares each redraw with the photo. If a redraw does not pass, the book keeps the photo. Redraw only when you can reproduce every element.
+- [owner] A HAND-DRAWN FIGURE (graph, 3D sketch) IS REDRAWN CLEAN: list every element (axes, labels, vectors, points, colours), draw all as vector, type the notes unchanged, add nothing the page lacks. An error of the page goes in CHECK.
+- [owner] A BLOCK OF ONLY FORMULAS AND TEXT (function, definition, theorem) GETS ONE CLEAN ILLUSTRATION when it helps (graph, geometry, vectors). It adds, never repeats: show what the text only states, in its symbols, no text line again. None if a figure is there.
 - The EXPLANATION is 3 to 8 short lines under each example: the idea, why the main steps are allowed, what to watch. It uses only the data of the example and of the section.
 - Plain theory, definitions, theorems and proofs are not examples: leave them as they are.
 - The checking model looks at what can be seen: the elements, the labels, the directions, the angles, the axes and the shape of the curves. It ignores the thickness of lines, fonts and colours.

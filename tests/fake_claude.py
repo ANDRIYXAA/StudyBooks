@@ -106,6 +106,39 @@ elif "You are the example editor of a study-book system" in prompt:
                 text = re.sub(r"\$([^$]+)\$", lambda m: "$" + m.group(1) + " + 0$", text, count=1)
             (cwd / "clean_ex.md").write_text(text, encoding="utf-8")
             (cwd / "result.json").write_text(json.dumps({"examples": 1, "draw_of": draw_of}), encoding="utf-8")
+elif "You are the illustrator of a study-book system" in prompt:
+    mode = os.environ.get("FAKE_ILLUS", "ok")
+    nums = re.findall(r"^\[B(\d+)\]", (cwd / "blocks.md").read_text(encoding="utf-8"), re.M)
+    if os.environ.get("FAKE_SEEN"):
+        with open(os.environ["FAKE_SEEN"], "a", encoding="utf-8") as _f:
+            _f.write(prompt + "\n=====\n")
+    items = []
+    (cwd / "draw").mkdir(exist_ok=True)
+    if mode != "none" and nums:
+        want = nums[:2] if mode == "two" else nums[:1]
+        if mode == "dup":
+            want = [nums[0], nums[0]]
+        for k, b in enumerate(want, 1):
+            items.append({"id": "i%d" % k, "block": int(b), "shows": "a picture"})
+            if mode != "nofile":
+                (cwd / "draw" / ("i%d.svg" % k)).write_text(
+                    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100"><line x1="10" y1="90" x2="190" y2="90" stroke="#222"/>'
+                    '<line x1="10" y1="90" x2="10" y2="10" stroke="#222"/><polyline points="10,90 60,60 120,40 190,20" fill="none" stroke="#222"/>'
+                    '<text x="100" y="60" font-size="14">f</text></svg>', encoding="utf-8")
+    (cwd / "ill.json").write_text(json.dumps({"illustrations": items}), encoding="utf-8")
+elif "You check new pictures of a study book" in prompt:
+    mode = os.environ.get("FAKE_ILLUS_VERIFY", "ok")
+    out = {}
+    for d_ in re.findall(r"render/(i[0-9]+)\.png", prompt):
+        fixed = "(cwd_fixed)" in (cwd / "draw" / (d_ + ".svg")).read_text(encoding="utf-8")
+        out[d_] = {"ok": True, "problems": []} if mode == "ok" or (mode == "fixable" and fixed) else \
+            {"ok": False, "problems": ["the curve does not go through the zero of the block"]}
+    if mode != "silent":
+        (cwd / "verify.json").write_text(json.dumps(out), encoding="utf-8")
+elif "You fix new pictures of a study book" in prompt:
+    for f in (cwd / "draw").glob("i*.svg"):
+        t = f.read_text(encoding="utf-8")
+        f.write_text(t.replace("</svg>", "<!-- (cwd_fixed) --></svg>"), encoding="utf-8")
 elif "You check redrawn diagrams of a study book" in prompt:
     mode = os.environ.get("FAKE_VERIFY", "ok")
     ids = re.findall(r"render/(d[0-9]+)\.png", prompt)

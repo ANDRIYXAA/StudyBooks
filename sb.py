@@ -401,12 +401,11 @@ class Space:
 
     # ---- the "switch between" box: the engines the person selected, in a fixed order
     def engines_on(self):
-        """The selected engines (the ones that may be used), in the order of the box. Without a selection: just `engine()`."""
+        """The selected engines (the ones that may be used), in the order of the box. Without a selection ever made: just
+        `engine()`. An empty list is a real choice: everything is off and nothing is processed."""
         on = self.prof().get("engines_on")
         if isinstance(on, list):
-            out = [e for e in en.ORDER if e in on]
-            if out:
-                return out
+            return [e for e in en.ORDER if e in on]
         return [self.engine()]
 
     def engine_key_file(self, name):
@@ -471,29 +470,37 @@ class Space:
     def grok_forget(self):
         (self.grok_home() / ".grok" / "auth.json").unlink(missing_ok=True)
 
-    # ---- Gemini: the official CLI with a Google sign-in (the API key way stays as the other option)
+    # ---- Gemini: Google's Antigravity CLI (`agy`) with a Google sign-in (the API key way stays as the other option).
+    # Google closed the sign-in of the old Gemini CLI for personal accounts; `agy` replaces it and uses the same models.
+    # The CLI keeps its own credentials under HOME (a folder of the person); the app only writes a marker when a sign-in worked.
     def gemini_home(self):
         return self.root / "gemini"
 
+    def _gemini_marker(self):
+        return self.gemini_home() / ".gemini" / "sb_signed_in"
+
     def gemini_cli_ok(self):
-        """Signed in with a Google account: the CLI keeps its credentials in GEMINI_CLI_HOME/.gemini/oauth_creds.json."""
-        return gemini_bin().exists() and (self.gemini_home() / ".gemini" / "oauth_creds.json").is_file()
+        """Signed in with a Google account: the sign-in of this app ended well and was not refused since."""
+        return gemini_bin().exists() and self._gemini_marker().is_file()
+
+    def gemini_mark_ok(self):
+        self.gemini_prepare()
+        self._gemini_marker().write_text(now_iso(), encoding="utf-8")
 
     def gemini_prepare(self):
-        """The folder and the setting that make the CLI use the Google sign-in (never a key from the server's environment)."""
-        d = self.gemini_home() / ".gemini"
-        d.mkdir(parents=True, exist_ok=True)
-        f = d / "settings.json"
-        if not f.exists():
-            write_json(f, {"security": {"auth": {"selectedType": "oauth-personal"}}})
+        """The folder that is HOME of the CLI for this person (so nobody shares credentials)."""
+        (self.gemini_home() / ".gemini").mkdir(parents=True, exist_ok=True)
 
     def gemini_env(self):
         env = {k: v for k, v in os.environ.items() if k not in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENAI_USE_VERTEXAI")}
-        env.update(GEMINI_CLI_HOME=str(self.gemini_home()), NO_BROWSER="true")
+        env.update(HOME=str(self.gemini_home()), NO_BROWSER="true")
         return env
 
     def gemini_forget(self):
-        (self.gemini_home() / ".gemini" / "oauth_creds.json").unlink(missing_ok=True)
+        self._gemini_marker().unlink(missing_ok=True)
+        d = self.gemini_home() / ".gemini" / "antigravity-cli"
+        for f in list(d.glob("*oauth*")) + list(d.glob("credentials*")):
+            f.unlink(missing_ok=True)
 
     def engine_connected(self, name):
         """Can this engine work for this person right now (signed in, or a key and a model)? Limits are not looked at."""
@@ -640,6 +647,8 @@ class Space:
 
     def engine_missing(self):
         on = self.engines_on()
+        if not on:
+            return L("Усі двигуни вимкнено", "All engines are switched off")
         if len(on) > 1:
             return L("Жоден з вибраних двигунів не підключений", "None of the selected engines is connected")
         if self.engine() == "openrouter":
@@ -2226,7 +2235,7 @@ def codex_bin():
     return Path(os.environ.get("SB_CODEX", CODEX))
 
 
-GEMINI = Path.home() / ".local" / "gemini-cli" / "node_modules" / ".bin" / "gemini"
+GEMINI = Path.home() / ".local" / "agy-cli" / "bin" / "agy"        # Antigravity CLI, installed with HOME=~/.local/agy-cli/home
 GROK = Path.home() / ".local" / "grok-cli" / "bin" / "grok"
 
 
@@ -2455,45 +2464,52 @@ def run_grok_cli(sp, prompt, cwd, add_dirs=(), timeout=2400, need_vision=False, 
 
 
 def run_gemini_cli(sp, prompt, cwd, add_dirs=(), timeout=2400, need_vision=False, role=None):
-    """The official Gemini CLI as this person (their Google sign-in in GEMINI_CLI_HOME). Headless run: the prompt comes on stdin,
-    file edits are approved by themselves (`auto_edit`), shell commands are not (nobody can approve them), and the tools stay
-    inside the work dir (the reference folders are added for reading)."""
+    """Google's Antigravity CLI (`agy`) as this person (their Google sign-in under their own HOME). Headless run: the task is
+    written to a file in the work dir (the CLI takes a short prompt), file edits are accepted by themselves, shell commands are
+    not (nobody can approve them), and the reference folders are added for reading."""
     gem = gemini_bin()
     if not gem.exists():
-        raise AuthError(L("Gemini CLI не встановлений на сервері", "The Gemini CLI is not installed on the server"))
+        raise AuthError(L("Antigravity CLI не встановлений на сервері", "The Antigravity CLI is not installed on the server"))
     sp.gemini_prepare()
     brief = agent_brief(role)
     text = (brief + "\n\n---\n\n" if brief else "") + prompt + \
         "\n\nNobody can answer questions: never ask any. Write every output file the task asks for in the current directory, then finish with one short line."
-    cmd = [str(gem), "--skip-trust", "--approval-mode", "auto_edit", "-o", "json", "-p", "Do the task that is given on standard input."]
+    task = Path(cwd) / "_agy_task.md"
+    task.write_text(text, encoding="utf-8")
+    cmd = [str(gem), "-p", "Read the file _agy_task.md in the current directory and do exactly the task it describes. Nobody can answer questions.",
+           "--output-format", "json", "--mode", "accept-edits", "--print-timeout", f"{max(60, int(timeout) - 30)}s"]
     model = sp.prof().get("gemini_cli_model")
     if model:
-        cmd += ["-m", model]
-    if add_dirs:
-        cmd += ["--include-directories", ",".join(str(d) for d in add_dirs)]
+        cmd += ["--model", model]
+    for d in add_dirs or ():
+        cmd += ["--add-dir", str(d)]
     t0 = time.time()
     set_status(cur_model=model or "gemini", cur_engine="gemini", cur_donor=None)
-    p = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE, text=True,
-                         env=sp.gemini_env(), start_new_session=True)
-    stdout, stderr = watch_process(sp, p, timeout, "Gemini", input=text)
+    try:
+        p = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, text=True,
+                             env=sp.gemini_env(), start_new_session=True)
+        stdout, stderr = watch_process(sp, p, timeout, "Gemini")
+    finally:
+        task.unlink(missing_ok=True)
     out = {}
     try:
         out = json.JSONDecoder().raw_decode(stdout[stdout.index("{"):])[0] if "{" in (stdout or "") else {}
     except ValueError:
         out = {}
     out = out if isinstance(out, dict) else {}
-    err = out.get("error") if isinstance(out.get("error"), dict) else {}
-    if p.returncode != 0 or err:
-        detail = " ".join(str(err.get("message") or stderr or stdout or "").split())[-500:] or f"exit {p.returncode}"
+    err = out.get("error") if out.get("error") else ""
+    failed = p.returncode != 0 or bool(err) or str(out.get("status") or "").upper() == "ERROR"
+    if failed:
+        detail = " ".join(str(err or stderr or stdout or "").split())[-500:] or f"exit {p.returncode}"
         kind = en.classify(detail)
-        if p.returncode == 41 or kind == "auth":
+        if kind == "auth":
             sp.gemini_forget()
             raise AuthError(L("Gemini не авторизований: ", "Gemini is not signed in: ") + detail[:300])
         if kind == "limit":
             raise TransientError(L("Gemini тимчасово недоступний: ", "Gemini is temporarily unavailable: ") + detail[:300])
         raise RuntimeError(L("помилка Gemini: ", "Gemini error: ") + detail[:600])
-    log(f"[{sp.uid}] gemini-cli {role or '-'} ok in {time.time() - t0:.0f}s cwd={cwd}")
-    return {"result": str(out.get("response") or ""), "num_turns": 1, "model": model or "gemini"}
+    log(f"[{sp.uid}] gemini-cli(agy) {role or '-'} ok in {time.time() - t0:.0f}s cwd={cwd}")
+    return {"result": str(out.get("response") or ""), "num_turns": int(out.get("num_turns") or 1), "model": model or "gemini"}
 
 
 def run_engine(sp, name, prompt, cwd, add_dirs, timeout, need_vision, role, max_usd):
@@ -2529,6 +2545,9 @@ def run_llm(sp, prompt, cwd, add_dirs=(), timeout=2400, need_vision=False, role=
     and the part of the skill the call gets. max_usd: Claude Code stops past this cost."""
     several = len(sp.engines_on()) > 1
     chain = sp.engine_chain() if several else sp.engines_on()
+    if not sp.engines_on():
+        raise TransientError(L("Усі двигуни вимкнено: увімкни хоча б один у вікні «що обробляє мій матеріал»",
+                               "All engines are switched off: switch one on in the \"what processes my material\" box"))
     if not chain:
         cool = sp.engine_cool_get()
         until = min((v["until"] for v in cool.values()), default=0)
@@ -2591,7 +2610,7 @@ def engines_view(sp):
 # (learn_skill); every version is kept and the admin can roll back.
 
 SKILL_SECTIONS = ("General", "transcribe", "refs", "clean", "fuse", "link", "examples")
-SKILL_MAX = 24000                  # characters of the whole file
+SKILL_MAX = 26000                  # characters of the whole file
 SKILL_SECTION_MAX = {"General": 3000}
 SKILL_SECTION_DEFAULT_MAX = 8000
 PAGE_GENERAL_MAX = 9000           # the page skill carries the whole house style in its General part
@@ -2692,12 +2711,27 @@ TYPST_RENAMES = [(re.compile(r"\bsect\b"), "inter"),
 MATH_RE = re.compile(r"(?<!\\)\$(.+?)(?<!\\)\$", re.S)
 
 
+def tighten_bars(m):
+    r"""pandoc writes |x| as `\| x \|` and Typst shows those spaces: `| y - x |`. The bars of one formula are paired in order:
+    no space after an opening bar, none before a closing bar. An odd number of bars (`{x | x > 0}`) is left as it is."""
+    chunks = m.split("\\|")
+    if len(chunks) < 3 or (len(chunks) - 1) % 2:
+        return m
+    for k in range(len(chunks) - 1):
+        if k % 2 == 0:
+            chunks[k + 1] = chunks[k + 1].lstrip(" ")
+        else:
+            chunks[k] = chunks[k].rstrip(" ")
+    return "\\|".join(chunks)
+
+
 def fix_typst_symbols(typ):
     def math(m):
         parts = re.split(r'("(?:[^"\\]|\\.)*")', m.group(1))   # leave "text" inside math alone
         for i in range(0, len(parts), 2):
             for rx, new in TYPST_RENAMES:
                 parts[i] = rx.sub(new, parts[i])
+            parts[i] = tighten_bars(parts[i])
         return "$" + "".join(parts) + "$"
     return MATH_RE.sub(math, typ)
 
@@ -2725,6 +2759,14 @@ PRELUDE = r"""
 #show figure.where(kind: table): set figure.caption(position: top)
 #set text(font: ("New Computer Modern", "DejaVu Sans"), size: 10.5pt, lang: "en")
 #set par(justify: true)
+// Typst cannot break a display formula, so one that is wider than its column (a page, an example box) would stick out: it is
+// shrunk to fit, but never below 50 %
+#show math.equation.where(block: true): it => layout(size => {
+  let m = measure(it)
+  if m.width > size.width and m.width > 0pt {
+    align(center, scale(calc.max(50%, size.width / m.width * 100%), reflow: true, it))
+  } else { it }
+})
 #show raw: set text(font: "DejaVu Sans Mono", size: 9pt)
 #set heading(numbering: (..n) => if n.pos().len() <= 2 { numbering("1.1", ..n) })
 #let entrymeta(s) = block(above: 0.5em, below: 1.1em, text(size: 8.5pt, fill: luma(110), s))
@@ -5687,7 +5729,7 @@ def update_digests(sp):
 # ---------------------------------------------------------------- books
 
 def cached_typst(sp, md):
-    h = hashlib.sha1(("typst-v2\n" + md).encode("utf-8")).hexdigest()   # bump when md_to_typst output changes
+    h = hashlib.sha1(("typst-v3\n" + md).encode("utf-8")).hexdigest()   # bump when md_to_typst output changes
     cdir = sp.d["build"] / "cache"
     cf = cdir / f"{h}.typ"
     if cf.exists():
@@ -5776,7 +5818,7 @@ def book_parts(sp, subj):
 # New uploads get it by themselves (when the uploads have stopped); the books of before only through a "run" that the
 # admin starts on the Admin tab (examples_run_*).
 
-EXAMPLES_VERSION = 1               # bump after changing prompts/examples*.md: every section is made again
+EXAMPLES_VERSION = 2               # bump after changing prompts/examples*.md or illustrate*.md: every section is made again
 EXAMPLES_STATE = STATE / "examples.json"
 EXAMPLES_MIN_CHARS = 300           # a shorter section has no examples worth a container
 EXAMPLES_ROUNDS = 2                # model calls to write the containers: the first, then one repair
@@ -5829,7 +5871,7 @@ def examples_for_book(sp, m):
         return None
     meta = read_json(d / "examples" / "meta.json", {}) or {}
     f = d / "examples" / "clean_ex.md"
-    return f.read_text(encoding="utf-8") if meta.get("examples") and f.exists() else None
+    return f.read_text(encoding="utf-8") if (meta.get("examples") or meta.get("illustrations")) and f.exists() else None
 
 
 def examples_eligible(m, since, run_subjects):
@@ -5961,6 +6003,179 @@ def verify_drawings(sp, work, subj, new, draw_of):
     return new, sorted(good), failed
 
 
+# ---- illustrations for plain blocks (formulas + text, no example): the model picks blocks and draws, code inserts the
+# markers, a vision call checks each picture against the text of its block. A picture that does not pass is not used.
+
+ILLUSTRATE = os.environ.get("SB_ILLUSTRATE", "1") != "0"
+ILLUS_MAX = 4                      # pictures in one section
+ILLUS_MIN_BLOCK = 60               # characters of a block that may get a picture
+ILLUS_ROUNDS = 2                   # model calls to draw: the first, then one repair
+ILLUS_VERIFY_ROUNDS = 2            # check, fix, check again
+_SR = SVG_RULES.split("\n")
+ILLUS_SVG_RULES = "\n".join([_SR[0], _SR[1], _SR[3],
+                             "- Labels: only the symbols, values and units that the block has, short. Never a sentence of the block.",
+                             "- No title, no frame, no caption: the book adds its own. Nothing outside the viewBox."])
+
+
+def illus_blocks(md):
+    """[(first line, end line (excluded), text)] of the plain-text blocks outside example containers that may get a
+    picture: long enough, not a heading, and no figure marker right before or after."""
+    lines = md.split("\n")
+    plain, inside = [], False
+    for l in lines:
+        if ex.START.match(l):
+            inside = True
+            plain.append(False)
+        elif ex.END.match(l):
+            inside = False
+            plain.append(False)
+        else:
+            plain.append(not inside and l.strip() != "")
+
+    def marker(k):
+        return 0 <= k < len(lines) and bool(ex.FIG_RE.search(lines[k]) or ex.DRAW_RE.search(lines[k]))
+
+    out, i = [], 0
+    while i < len(lines):
+        if not plain[i]:
+            i += 1
+            continue
+        j = i
+        while j < len(lines) and plain[j]:
+            j += 1
+        text = "\n".join(lines[i:j])
+        a, b = i - 1, j
+        i = j
+        if text.lstrip().startswith("#") or ex.FIG_RE.search(text) or ex.DRAW_RE.search(text):
+            continue
+        if len(re.sub(r"\s+", " ", text)) < ILLUS_MIN_BLOCK:
+            continue
+        while a >= 0 and lines[a].strip() == "":
+            a -= 1
+        while b < len(lines) and lines[b].strip() == "":
+            b += 1
+        if marker(a) or marker(b):
+            continue
+        out.append((j - len(text.split("\n")), j, text))
+    return out
+
+
+def illus_problems(work, blocks):
+    """English reasons why `ill.json` of the model cannot be used, else ([], the picks)."""
+    res = read_json(work / "ill.json", None)
+    items = res.get("illustrations") if isinstance(res, dict) else None
+    if not isinstance(items, list):
+        return ["`ill.json` must be `{\"illustrations\": [...]}`"], []
+    out, picks, ids, used = [], [], set(), set()
+    if len(items) > ILLUS_MAX:
+        out.append(f"{len(items)} pictures; at most {ILLUS_MAX} in one section")
+    for it in items[:ILLUS_MAX + 4]:
+        it = it if isinstance(it, dict) else {}
+        pid, blk = str(it.get("id") or ""), it.get("block")
+        if not re.fullmatch(r"i[0-9]{1,2}", pid) or pid in ids:
+            out.append(f"the picture id `{pid}` must be `i1`, `i2`, ... and unique")
+            continue
+        if not isinstance(blk, int) or isinstance(blk, bool) or not 1 <= blk <= len(blocks):
+            out.append(f"{pid}: `block` must be the number of one block, 1 to {len(blocks)}")
+            continue
+        if blk in used:
+            out.append(f"{pid}: block {blk} has a picture already; one picture for one block")
+            continue
+        f = work / "draw" / f"{pid}.svg"
+        if not f.exists():
+            out.append(f"{pid}: the file `draw/{pid}.svg` is missing")
+            continue
+        bad = ex.svg_problems(f.read_text(encoding="utf-8", errors="replace"))
+        if bad:
+            out += [f"draw/{pid}.svg: {p}" for p in bad]
+            continue
+        ids.add(pid)
+        used.add(blk)
+        picks.append((pid, blk))
+    return out[:10], picks
+
+
+def verify_illustrations(sp, work, blocks, picks):
+    """The pictures are compared with the text of their blocks by a second call; one fix for the ones that fail.
+    -> ids that pass, ids given up."""
+    good, problems = set(), {}
+    ids = [p for p, _ in picks]
+    (work / "blocks").mkdir(exist_ok=True)
+    for pid, blk in picks:
+        (work / "blocks" / f"{pid}.txt").write_text(blocks[blk - 1][2], encoding="utf-8")
+    for rnd in range(ILLUS_VERIFY_ROUNDS):
+        pending = [x for x in ids if x not in good]
+        if not pending:
+            break
+        ready = []
+        for x in pending:
+            try:
+                render_svg_png(work, x)
+                ready.append(x)
+            except ValueError as e:
+                problems[x] = ["the SVG does not render: " + " ".join(str(e).split())[:200]]
+        if ready:
+            (work / "verify.json").unlink(missing_ok=True)
+            listing = "\n".join(f"- `render/{x}.png` (block text: `blocks/{x}.txt`)" for x in ready)
+            run_llm(sp, render_prompt("illustrate_verify.md", pairs=listing), work, role="verify", need_vision=True)
+            vj = read_json(work / "verify.json", {}) or {}
+            for x in ready:
+                v = vj.get(x) if isinstance(vj, dict) else None
+                if isinstance(v, dict) and v.get("ok") is True:
+                    good.add(x)
+                    problems[x] = []
+                else:
+                    pl = v.get("problems") if isinstance(v, dict) and isinstance(v.get("problems"), list) else []
+                    problems[x] = [str(p)[:220] for p in pl][:6] or ["the checker did not confirm that this picture is correct"]
+        pending = [x for x in ids if x not in good]
+        if pending and rnd == 0:
+            saved = {x: (work / "draw" / f"{x}.svg").read_bytes() for x in pending}
+            listing = "\n".join(f"- `draw/{x}.svg` (picture `render/{x}.png`, block `blocks/{x}.txt`):\n" +
+                                "\n".join(f"  - {p}" for p in problems.get(x, [])) for x in pending)
+            run_llm(sp, render_prompt("illustrate_fix.md", pairs=listing, svg_rules=ILLUS_SVG_RULES), work, role="examples", need_vision=True)
+            for x in pending:
+                f = work / "draw" / f"{x}.svg"
+                if not f.exists() or ex.svg_problems(f.read_text(encoding="utf-8", errors="replace")):
+                    f.write_bytes(saved[x])
+    failed = [x for x in ids if x not in good]
+    for x in failed:
+        (work / "draw" / f"{x}.svg").unlink(missing_ok=True)
+    return sorted(good), failed
+
+
+def illustrate_section(sp, subj, m, work, text):
+    """One section: the plain blocks of `text` may get pictures. The text is never rewritten: only `{{draw:iN}}` lines are
+    inserted after the chosen blocks. -> (text, ids kept, ids given up)."""
+    blocks = illus_blocks(text)
+    if not blocks:
+        return text, [], []
+    s = find_subject(sp.load_syllabus(), subj) or {"title": subj}
+    (work / "draw").mkdir(exist_ok=True)
+    (work / "blocks.md").write_text("\n\n".join(f"[B{n}] {t}" for n, (_, _, t) in enumerate(blocks, 1)), encoding="utf-8")
+    (work / "clean.md").write_text(text, encoding="utf-8")
+    base = render_prompt("illustrate.md", subject=s["title"], title=m["title"], max=ILLUS_MAX, svg_rules_illus=ILLUS_SVG_RULES)
+    prompt, picks = base, []
+    for rnd in range(ILLUS_ROUNDS):
+        (work / "ill.json").unlink(missing_ok=True)
+        run_llm(sp, prompt, work, role="examples")
+        problems, picks = illus_problems(work, blocks)
+        if not problems:
+            break
+        log(f"[{sp.uid}] illustrations {subj}/{m['dir'].name}: round {rnd + 1} refused: {problems[0][:160]}")
+        prompt = render_prompt("repair.md", problems="\n".join(f"- {p}" for p in problems), task=base)
+    else:
+        return text, [], []
+    if not picks:
+        return text, [], []
+    good, failed = verify_illustrations(sp, work, blocks, picks)
+    lines = text.split("\n")
+    for pid, blk in sorted(picks, key=lambda p: -blocks[p[1] - 1][1]):
+        if pid in good:
+            end = blocks[blk - 1][1]
+            lines[end:end] = ["", "{{draw:%s}}" % pid, ""]
+    return "\n".join(lines), good, failed
+
+
 def examples_book_typst(sp, m, md, counter):
     """The section of the clean book with its example containers as Typst. -> (typst, number of containers)."""
     d = m["dir"]
@@ -6048,16 +6263,29 @@ def make_examples(sp, subj, m, sha):
             for x in sorted(set(ex.DRAW_RE.findall(new))):         # no way to compare: the photo stays
                 new = new.replace("{{draw:%s}}" % x, "{{fig:%s}}" % draw_of.get(x, ""))
                 given_up.append(x)
+    ill_ok, ill_drop = [], []
+    if ILLUSTRATE and not m.get("asis"):                  # pictures for the plain blocks; a failure here never loses the containers
+        try:
+            if engine_sees(sp):
+                text_in = new if new.strip() else old
+                text_out, ill_ok, ill_drop = illustrate_section(sp, subj, m, work, text_in)
+                if ill_ok:
+                    new = text_out
+        except (AuthError, TransientError, StoppedError):
+            raise
+        except Exception as e:
+            ill_ok, ill_drop = [], []
+            log(f"[{sp.uid}] illustrations {subj}/{d.name} skipped: {type(e).__name__}: {e}")
     tmp = d / "examples.tmp"
     shutil.rmtree(tmp, ignore_errors=True)
     (tmp / "draw").mkdir(parents=True)
     if new.strip():
         (tmp / "clean_ex.md").write_text(new, encoding="utf-8")
-        for x in kept:
+        for x in kept + ill_ok:
             shutil.copy(work / "draw" / f"{x}.svg", tmp / "draw" / f"{x}.svg")
     checks = sum(1 for e in ex.examples_of(ex.parse(new)) if e["sections"].get("CHECK")) if new.strip() else 0
     write_json(tmp / "meta.json", {"sha": sha, "version": EXAMPLES_VERSION, "added": now_iso(), "examples": n, "drawn": kept,
-                                   "photo": given_up, "checks": checks})
+                                   "photo": given_up, "checks": checks, "illustrations": ill_ok, "illustrations_dropped": ill_drop})
     final = d / "examples"
     shutil.rmtree(final, ignore_errors=True)
     tmp.rename(final)
@@ -6069,7 +6297,8 @@ def make_examples(sp, subj, m, sha):
             raise PermanentError(L("контейнери не збираються в PDF: ", "the containers do not compile into the PDF: ") + " ".join(str(e).split())[:300])
     shutil.rmtree(work, ignore_errors=True)
     sp.mark_dirty(subj)
-    log(f"[{sp.uid}] examples {subj}/{d.name}: {n} containers, {len(kept)} drawings, {len(given_up)} kept as photos, {checks} with a CHECK")
+    log(f"[{sp.uid}] examples {subj}/{d.name}: {n} containers, {len(kept)} drawings, {len(given_up)} kept as photos, {checks} with a CHECK, "
+        f"{len(ill_ok)} illustrations ({len(ill_drop)} given up)")
 
 
 def record_examples_failure(sp, subj, m, sha, err):

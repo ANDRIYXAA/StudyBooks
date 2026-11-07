@@ -223,6 +223,11 @@ ul.list li.lk { align-items: center; }
 @keyframes sbspin { to { transform: rotate(360deg); } }
 @keyframes sbpulse { 50% { opacity: .25; } }
 @media (prefers-reduced-motion: reduce) { .act i, .act.wait i { animation: none; } }
+.rainbow { background: linear-gradient(90deg, #e5484d, #f08a24, #d6b400, #2fb15f, #1fa6c9, #5b6ef5, #b05cf0, #e5484d) 0 0 / 200% 100% repeat-x;
+  -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; color: transparent;
+  animation: sbrainbow 3.2s linear infinite; }
+@keyframes sbrainbow { to { background-position: 200% 0; } }
+@media (prefers-reduced-motion: reduce) { .rainbow { animation: none; } }
 .topics { columns: 2 260px; margin: 8px 0 0; padding-left: 18px; }
 .topics li { break-inside: avoid; } .topics .zero { color: var(--muted); }
 .empty { color: var(--muted); padding: 22px 0; text-align: center; font: italic 300 16px var(--sans); }
@@ -1155,7 +1160,7 @@ const D = [
   ["sw.rest", t => `ліміт до ${t}`, t => `limit until ${t}`],
   ["sw.noConn", "підключи в вкладці нижче", "connect it in the tab below"],
   ["sw.saved", "Збережено", "Saved"],
-  ["sw.need", "Обери хоча б один двигун", "Select at least one engine"],
+  ["sw.off", "Усі двигуни вимкнено: черга стоїть і нічого не витрачається", "All engines are off: the queue waits and nothing is spent"],
   ["codex.intro", "Codex працює з твоєю підпискою ChatGPT: сервер запускає незмінений Codex CLI, ти відкриваєш посилання, вводиш одноразовий код, і Codex сам зберігає вхід (сервер його не читає).",
    "Codex works with your ChatGPT plan: the server runs the unmodified Codex CLI, you open the link, enter the one-time code, and Codex stores the sign-in itself (the server does not read it)."],
   ["codex.warn", "Кожен може підключити свій ChatGPT. За умовами OpenAI, застосунок на віддаленому сервері з входом через ChatGPT потребує їхнього дозволу: ризик бере на себе власник сайту. Власник може закрити це через SB_CODEX_OPEN=0.",
@@ -1186,17 +1191,17 @@ const D = [
   ["gk.ok", "Grok підключено через акаунт xAI", "Grok is connected with an xAI account"],
   ["gk.out", "Вийти з xAI", "Sign out of xAI"],
   ["gk.missing", "Grok CLI ще не встановлений на сервері: можна лише ключ API.", "The Grok CLI is not installed on the server yet: only an API key works."],
-  ["gm.intro", "Gemini працює з твоїм акаунтом Google: сервер запускає офіційний Gemini CLI, ти відкриваєш посилання, входиш і копіюєш код, який покаже Google. Ключ не потрібен.",
-   "Gemini works with your Google account: the server runs the official Gemini CLI, you open the link, sign in, and copy the code that Google shows. No key is needed."],
+  ["gm.intro", "Gemini працює з твоїм акаунтом Google (підійде й університетський з підпискою): сервер запускає Antigravity CLI від Google, ти відкриваєш посилання, входиш і за 60 секунд копіюєш код, який покаже Google. Ключ не потрібен.",
+   "Gemini works with your Google account (a university account with a subscription works too): the server runs Google's Antigravity CLI, you open the link, sign in, and within 60 seconds copy the code that Google shows. No key is needed."],
   ["gm.start", "Увійти через Google", "Sign in with Google"],
   ["gm.step1", "Відкрий посилання й увійди", "Open the link and sign in"],
-  ["gm.step2", "Скопіюй код зі сторінки Google й встав сюди:", "Copy the code from the Google page and paste it here:"],
+  ["gm.step2", "Скопіюй код зі сторінки Google й встав сюди (маєш 60 секунд від посилання):", "Copy the code from the Google page and paste it here (you have 60 seconds from the link):"],
   ["gm.codePh", "Код із Google", "Code from Google"],
   ["gm.ok", "Gemini підключено через акаунт Google", "Gemini is connected with a Google account"],
   ["gm.out", "Вийти з Google", "Sign out of Google"],
   ["gm.orKey", "Або використати ключ API", "Or use an API key"],
   ["gm.fail", "Вхід не вдався: ", "The sign-in failed: "],
-  ["gm.missing", "Gemini CLI ще не встановлений на сервері: можна лише ключ API.", "The Gemini CLI is not installed on the server yet: only an API key works."],
+  ["gm.missing", "Antigravity CLI ще не встановлений на сервері: можна лише ключ API.", "The Antigravity CLI is not installed on the server yet: only an API key works."],
   ["key.have", (n, h) => `${n} підключено, ключ ${h}`, (n, h) => `${n} is connected, key ${h}`],
   ["key.remove", "Прибрати ключ", "Remove the key"],
   ["key.model", "Модель", "Model"],
@@ -1856,13 +1861,12 @@ function bindSwitch() {
   document.querySelectorAll("button[data-swtab]").forEach(b => b.onclick = () => { dtab = b.dataset.swtab; renderDlg(); });     // the name opens the tab of the engine: sign in there
   document.querySelectorAll("input[data-sw]").forEach(c => c.onchange = async () => {
     const on = [...document.querySelectorAll("input[data-sw]:checked")].map(x => x.dataset.sw), msg = $("#swMsg");
-    if (!on.length) { c.checked = true; msg.textContent = t("sw.need"); msg.className = "msg bad"; return; }
-    const r = await apiPost("/api/engines", {on});
+    const r = await apiPost("/api/engines", {on});          // an empty list is allowed: everything off
     const j = await r.json().catch(() => ({}));
     await refresh();
     renderDlg();
     const m = $("#swMsg");
-    if (r.ok) { m.textContent = t("sw.saved"); m.className = "msg ok"; } else { m.textContent = String(j.detail || r.status); m.className = "msg bad"; }
+    if (r.ok) { m.textContent = on.length ? t("sw.saved") : t("sw.off"); m.className = "msg ok"; } else { m.textContent = String(j.detail || r.status); m.className = "msg bad"; }
   });
 }
 async function postJSON(url, body) {
@@ -2193,8 +2197,20 @@ function render() {
   $("#members").hidden = !S.participants;
   document.querySelector(".engwrap").hidden = !!S.anon;
   const SW = E.switch, nOn = SW ? SW.on.filter(n => SW.engines[n].connected).length : 0;
-  setText($("#claudeBtn"), !E.ready ? t("btn.setup") : nOn > 1 ? SW.on.filter(n => SW.engines[n].connected).map(n => SW.engines[n].label).join(" + ") : ["codex", "grok", "gemini"].includes(E.name) ? SW.engines[E.name].label + (SW.engines[E.name].model ? ": " + SW.engines[E.name].model : "") : E.name === "openrouter" ? "OpenRouter: " + (E.openrouter.model === "auto:free" ? t("btn.free") : (E.openrouter.model || "")) : "Claude: " + (c.email || t("common.connected")),
-          E.ready ? "btn small" : "btn small primary");
+  // the engine that works right now is written with a moving rainbow (S.working comes from the worker's status)
+  const wk = S.working && S.working.engine, wm = shortModel(S.working && S.working.model);
+  const rb = txt => `<span class="rainbow">${esc(txt)}</span>`;
+  let lbl;
+  if (!E.ready) lbl = esc(t("btn.setup"));
+  else if (nOn > 1) lbl = SW.on.filter(n => SW.engines[n].connected).map(n => n === wk ? rb(SW.engines[n].label + (wm ? " · " + wm : "")) : esc(SW.engines[n].label)).join(" + ");
+  else {
+    const one = ["codex", "grok", "gemini"].includes(E.name) ? SW.engines[E.name].label + (SW.engines[E.name].model ? ": " + SW.engines[E.name].model : "") : E.name === "openrouter" ? "OpenRouter: " + (E.openrouter.model === "auto:free" ? t("btn.free") : (E.openrouter.model || "")) : "Claude: " + (c.email || t("common.connected"));
+    lbl = wk && wk === E.name ? rb(one) : esc(one);
+  }
+  setHTML($("#claudeBtn"), lbl);
+  const bcls = E.ready ? "btn small" : "btn small primary";
+  if ($("#claudeBtn").className !== bcls) $("#claudeBtn").className = bcls;
+  $("#claudeBtn").title = wk ? engineWho() : "";
 
   const tb = S.turbo || {};
   $("#turboWrap").hidden = !!S.anon || !tb.available;
@@ -2750,6 +2766,10 @@ async function entryEditUndo(subject, topic, entry) {
 // what the server is doing to a book: spinner while Claude works or the PDFs are built, a pulsing dot while waiting
 const ACT_WAIT = {queued: 1};
 /* who is working right now: the labels start with "Claude", the real engine and model come from the worker's status */
+function shortModel(m) {
+  const x = String(m || "").replace(/^[^/]*\//, "").replace(/:free$/, "").replace(/-\d{6,}$/, "");
+  return x.length > 26 ? x.slice(0, 25) + "…" : x;
+}
 function engineWho() {
   const w = S && S.working;
   if (!w || !w.engine) return "Claude";

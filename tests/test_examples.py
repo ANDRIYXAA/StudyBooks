@@ -13,6 +13,7 @@ from pathlib import Path
 os.environ.setdefault("SB_DATA", tempfile.mkdtemp())
 os.environ["SB_DIGEST_QUIET"] = "0"
 os.environ["SB_SV_PORTS"] = ""
+os.environ["SB_ILLUSTRATE"] = "0"          # the pictures for plain blocks have their own test (test_illustrate.py)
 os.environ.setdefault("SB_CLAUDE", str(Path(__file__).resolve().parent / "fake_claude.py"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -276,7 +277,7 @@ check("the Admin page has the examples card and the strings in both languages", 
 
 # ---------------------------------------------------------------- the skill and the roles
 seed = (Path(__file__).resolve().parent / "skills" / "studybooks-material" / "SKILL.md").read_text(encoding="utf-8")
-check("the material skill has the examples section with the owner's rules", "examples" in sb.SKILL_SECTIONS and sum("[owner]" in l for l in sb.skill_sections(seed)["examples"].splitlines()) == 3)
+check("the material skill has the examples section with the owner's rules", "examples" in sb.SKILL_SECTIONS and sum("[owner]" in l for l in sb.skill_sections(seed)["examples"].splitlines()) == 5)
 check("the calls for examples and for the check of drawings get that section", "For this task (examples)" in sb.agent_brief("examples") and "For this task (examples)" in sb.agent_brief("verify"))
 check("both roles run on a cheap model", sb.ROLE_MODELS.get("examples") == "sonnet" and sb.ROLE_MODELS.get("verify") == "sonnet")
 

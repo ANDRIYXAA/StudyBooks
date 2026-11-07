@@ -164,6 +164,31 @@ csp = resp.headers.get("content-security-policy", "")
 check("the page may frame only its own site and loads nothing outside", "frame-src 'self'" in csp and "default-src 'none'" in csp and "frame-ancestors 'none'" in csp and "http://" not in html and "https://" not in html, csp)
 check("the frame is sandboxed, titles never go through innerHTML", 'sandbox="allow-scripts"' in html and "allow-same-origin" not in html and "innerHTML" not in html)
 check("never cached", resp.headers.get("cache-control") == "no-store")
+
+# ---- the "Changed" button: what was changed on a page
+sb.write_json(idir / "a3.json", {"title": "Page A3 (changed)", "topic": "beta", "topic_title": "Beta", "added": "2026-11-03T17:29:00+01:00",
+                                  "request": "add conductance", "changes": ["Added G = 1/R", "</script><b>x</b>", 5], "from": "a1",
+                                  "by": "pub-secret-person"})
+sb.write_json(idir / "dup1.json", {"title": "Same title", "topic": "t", "topic_title": "T", "added": "2026-10-26T01:00:00+01:00",
+                                    "edited": "2026-11-01T10:00:00+01:00", "changes": ["Bigger plot"],
+                                    "edits": [{"at": "2026-11-01T10:00:00+01:00", "by": "pub-secret-person", "request": "make the plot bigger"}]})
+html = web.combined_page(req(), A, cid).body.decode()
+m = re.search(r"const DATA = (\{.*?\});\nconst T", html, re.S)
+chg = {p["stem"]: p["chg"] for g in json.loads(m.group(1))["subject"]["groups"] for p in g["pages"]}
+check("a copy shows the page it was made from, its request and its changes",
+      chg["a3"] and chg["a3"]["kind"] == "copy" and chg["a3"]["from"]["stem"] == "a1" and chg["a3"]["from"]["title"] == "Page A1 edited"
+      and chg["a3"]["request"] == "add conductance" and chg["a3"]["changes"] == ["Added G = 1/R", "</script><b>x</b>"], chg.get("a3"))
+check("a page changed in place shows its edits", chg["dup1"] and chg["dup1"]["kind"] == "edit" and chg["dup1"]["edits"] == [
+      {"at": "2026-11-01T10:00:00+01:00", "request": "make the plot bigger"}] and chg["dup1"]["changes"] == ["Bigger plot"], chg.get("dup1"))
+check("a page never changed has no Changed data", chg["a1"] is None and chg["dup2"] is None, chg)
+check("no uid in the change data, nothing leaves the script block", "pub-secret-person" not in html and html.count("</script>") == 1)
+pages_a = {p["stem"]: p for p in sb.interactive_pages(main, A)}
+anon = web.page_changes(idir, "a3", pages_a, False)
+check("without a sign-in the request texts are left out", "request" not in anon and anon["changes"]
+      and all("request" not in e for e in web.page_changes(idir, "dup1", pages_a, False)["edits"]), anon)
+sb.write_json(idir / "a4.json", {"title": "Page A4", "topic": "beta", "added": "x", "from": "gone-page"})
+check("a deleted original gives from = None", web.page_changes(idir, "a4", pages_a, True)["from"] is None)
+check("the page has the Changed button and its words in both languages", 'id="chgBtn"' in html and '["Змінено", "Changed"]' in html)
 try:
     web.combined_page(req(), B, cid)
     check("a set is not reachable under another subject", False)

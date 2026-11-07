@@ -329,7 +329,10 @@ check("select: Codex is for the owner only", err and err[0] == 403, (res, err))
 res, err = call(web.api_engines, g2, {"on": ["claude", "grok"]})
 check("select: an engine without a key is refused", err and err[0] == 400 and "Grok" in err[1], (res, err))
 res, err = call(web.api_engines, g2, {"on": []})
-check("select: at least one", err and err[0] == 400, (res, err))
+check("select: everything off is allowed; nothing runs and the reason is clear",
+      err is None and g2.engines_on() == [] and not g2.engine_ok() and ("off" in g2.engine_missing().lower() or "вимкнено" in g2.engine_missing()), (res, err))
+res, err = call(web.api_engines, g2, {"on": ["claude"]})
+check("select: switched on again after everything was off", err is None and g2.engines_on() == ["claude"], (res, err))
 res, err = call(web.api_engines, g2, {"on": ["claude", "bogus"]})
 check("select: an unknown engine is refused", err and err[0] == 400, (res, err))
 res, err = call(web.api_engine_key, g2, {"engine": "grok", "key": BAD})
@@ -403,11 +406,11 @@ check("an empty code is a 400", err and err[0] == 400, (res, err))
 w = work("gm1")
 r = sb.run_gemini_cli(g3, "do the gemini task", w, add_dirs=[HERE], role="clean")
 gl = [json.loads(l) for l in Path(os.environ["FAKE_GEMINI_LOG"]).read_text().splitlines()]
-check("Gemini CLI: the prompt goes on stdin with the skill in front, the answer is read from the JSON", r["result"] == "Done by gemini." and (w / "gemini_out.txt").exists()
-      and "do the gemini task" in gl[-1]["prompt"] and "Skill `studybooks-material`" in gl[-1]["prompt"], gl[-1])
-check("... auto_edit (no shell), JSON output, the reference folder added, trust skipped", "auto_edit" in gl[-1]["args"] and "json" in gl[-1]["args"] and "--include-directories" in gl[-1]["args"]
-      and str(HERE) in gl[-1]["args"][gl[-1]["args"].index("--include-directories") + 1] and "--skip-trust" in gl[-1]["args"], gl[-1]["args"])
-check("... its own GEMINI_CLI_HOME, run in the work dir, and no key from the server's environment", gl[-1]["home"] == str(g3.gemini_home()) and gl[-1]["cwd"] == str(w) and gl[-1]["env_key"] is None)
+check("Antigravity CLI: the task is in the file _agy_task.md with the skill in front, the answer is read from the JSON", r["result"] == "Done by gemini." and (w / "gemini_out.txt").exists()
+      and "do the gemini task" in gl[-1]["prompt"] and "Skill `studybooks-material`" in gl[-1]["prompt"] and not (w / "_agy_task.md").exists(), gl[-1])
+check("... accept-edits (no shell), JSON output, the reference folder added", "accept-edits" in gl[-1]["args"] and "json" in gl[-1]["args"] and "--add-dir" in gl[-1]["args"]
+      and str(HERE) in gl[-1]["args"][gl[-1]["args"].index("--add-dir") + 1], gl[-1]["args"])
+check("... its own HOME, run in the work dir, and no key from the server's environment", gl[-1]["home"] == str(g3.gemini_home()) and gl[-1]["cwd"] == str(w) and gl[-1]["env_key"] is None)
 for mode, exc, why in (("limit", sb.TransientError, "a quota limit"), ("auth", sb.AuthError, "a sign-in problem"), ("fail", RuntimeError, "another failure")):
     os.environ["FAKE_GEMINI"] = mode
     try:
@@ -417,7 +420,7 @@ for mode, exc, why in (("limit", sb.TransientError, "a quota limit"), ("auth", s
         check(f"Gemini CLI: {why} is told apart", type(e) is exc, type(e).__name__)
     if mode == "auth":
         check("... a refused sign-in is forgotten", not g3.gemini_cli_ok())
-        (g3.gemini_home() / ".gemini" / "oauth_creds.json").write_text("{}")
+        g3.gemini_mark_ok()
 os.environ.pop("FAKE_GEMINI")
 check("the quota text gives the rest time", en.cool_seconds("[API Error: 429 Quota exceeded. Please retry in 3 hours.]") == 3 * 3600)
 # run_llm uses the CLI when signed in, the key when not
@@ -431,7 +434,7 @@ Path(os.environ["FAKE_GEMINI_LOG"]).unlink()
 sb.run_llm(g3, "via the key", work("gm3"), role="clean")
 check("... and with only an API key it uses the key loop", not Path(os.environ["FAKE_GEMINI_LOG"]).exists() and (work("gm3") / "oa_out.txt").exists())
 # switching: Claude at its limit, Gemini (CLI) takes over
-(g3.gemini_home() / ".gemini" / "oauth_creds.json").write_text("{}")
+g3.gemini_mark_ok()
 g3.update_profile(engines_on=["claude", "gemini"], engine="claude")
 os.environ["FAKE_ERROR"] = "429 rate limit"
 w = work("gm4")

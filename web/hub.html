@@ -46,6 +46,16 @@
   .edit .emsg { font-size: 13px; color: #a8a8a2; }
   .edit .emsg.bad { color: #ff8a80; }
   .edit .emsg.ok { color: #9be3a4; }
+  /* "Changed": what was changed on the open page (right of the menu row, under "Change") */
+  .mrow { display: flex; align-items: flex-start; gap: 12px; padding-right: 28px; }
+  .mrow .menu { flex: 1; min-width: 0; }
+  .chgb { flex: none; margin-top: 4px; padding: 5px 14px; font-size: 13px; }
+  .chgb[aria-expanded="true"] { background: #f1f1ee; color: #0b0b0b; }
+  .chg .chead { color: #f1f1ee; font-size: 14px; }
+  .chg ul { margin: 4px 0 8px; padding-left: 20px; font-size: 14px; line-height: 1.4; }
+  .chg li { margin: 2px 0; }
+  .chg .src button { padding: 3px 10px; font-size: 13px; margin-left: 4px; }
+  .chg .src a { color: #a8a8a2; }
   @media (max-width: 700px) { .edit { padding: 0 14px 12px; } .langbar .editb { margin-right: 8px; } }
   @media (max-width: 700px) { header { padding: 16px 14px 6px; } .langbar { right: 14px; top: 14px; } .menu { padding: 0 14px 10px; } .bar { padding: 6px 14px; } button { padding: 9px 12px; } }
   /* glass menu buttons: the same recipe as in the skill studybooks-interactive (dark only here) */
@@ -81,7 +91,9 @@
     .sub { display: none; }
     .langbar { position: static; flex: none; order: 3; }
     .langbar button { padding: 4px 10px; font-size: 12px; }
-    .menu { position: relative; padding: 0 12px; border-top: 1px solid #262624; border-bottom: 1px solid #262624; }
+    .mrow { position: relative; align-items: center; padding-right: 12px; border-top: 1px solid #262624; border-bottom: 1px solid #262624; }
+    .menu { position: static; padding: 0 12px; }
+    .chgb { margin-top: 0; padding: 4px 10px; font-size: 12px; }
     .menu summary { padding: 6px 0; list-style: none; }
     .menu summary::before, .menu:not([open]) summary::before { content: none; }
     .menu[open] #groups { position: absolute; left: 0; right: 0; top: 100%; z-index: 10; max-height: 72vh; overflow: auto;
@@ -103,10 +115,18 @@
   <textarea id="editText" maxlength="2000"></textarea>
   <div class="erow"><button type="button" id="editSend"></button><button type="button" id="editClose"></button><span class="emsg" id="editMsg" role="status"></span></div>
 </div>
+<div class="mrow">
 <details class="menu" id="menu" open>
   <summary id="menusum"><span id="menuglass"><b class="gring" aria-hidden="true"></b><span><i id="menutxt"></i></span></span></summary>
   <div id="groups"></div>
 </details>
+<button type="button" class="chgb" id="chgBtn" aria-expanded="false" hidden></button>
+</div>
+<div class="edit chg" id="chgBox" hidden>
+  <p class="chead" id="chgHead"></p>
+  <div id="chgBody"></div>
+  <div class="erow"><button type="button" id="chgClose"></button></div>
+</div>
 <div class="bar" id="bar" hidden>
   <h2 id="cur"></h2>
   <a id="alone" target="_blank" rel="noopener"></a>
@@ -133,6 +153,16 @@ const T = {
   reload: ["Оновити", "Reload"],
   signin: ["Щоб змінювати сторінки, увійди на головній сторінці сайту.", "To change pages, sign in on the main page of the site."],
   failed: ["Не вийшло: ", "Failed: "],
+  chg: ["Змінено", "Changed"],
+  chgHead: ["Що змінено на сторінці", "What was changed on the page"],
+  chgFrom: ["Зроблено зі сторінки", "Made from the page"],
+  chgOpen: ["відкрити", "open"],
+  chgGone: ["Сторінку, з якої це зроблено, уже видалено.", "The page this was made from is deleted."],
+  chgReq: ["Запит: ", "Request: "],
+  chgList: ["Що зроблено:", "What was done:"],
+  chgLast: ["Остання зміна:", "The last change:"],
+  chgEdits: ["Зміни цієї сторінки:", "Changes to this page:"],
+  chgNone: ["Список змін не збережено.", "No list of changes was kept."],
 };
 function initialLang() {
   try { const v = localStorage.getItem("hub.lang") || localStorage.getItem("lang"); if (v === "uk" || v === "en") return v; } catch (e) {}
@@ -174,6 +204,10 @@ function applyUi() {
   $("editText").placeholder = t("editPh");
   $("editSend").textContent = t("send");
   $("editClose").textContent = t("close");
+  $("chgBtn").textContent = t("chg");
+  $("chgClose").textContent = t("close");
+  $("chgBtn").hidden = !(cur && cur.chg);
+  if (!$("chgBox").hidden) renderChanges();
 }
 /*__GLASS_JS__*/
 function setLang(l) {
@@ -217,6 +251,45 @@ $("editSend").onclick = async () => {
   $("editSend").disabled = false;
 };
 
+/* Changed: what was changed on the page that is open now (its request and the list of changes; data from the server) */
+const when = iso => String(iso || "").slice(0, 16).replace("T", " ");
+function renderChanges() {
+  const c = cur && cur.chg, body = $("chgBody");
+  body.replaceChildren();
+  if (!c) return;
+  $("chgHead").textContent = t("chgHead") + " «" + cur.title + "»" + (c.at ? " · " + when(c.at) : "");
+  if (c.kind === "copy") {
+    const p = mk("p", {className: "src"});
+    if (c.from) {
+      p.append(t("chgFrom") + " «" + c.from.title + "»");
+      if (all.some(x => x.stem === c.from.stem)) { const b = mk("button", {type: "button"}, t("chgOpen")); b.onclick = () => choose(c.from.stem, true); p.append(b); }
+      else { p.append(" "); p.append(mk("a", {href: c.from.url, target: "_blank", rel: "noopener"}, t("chgOpen") + " ↗")); }
+    } else p.textContent = t("chgGone");
+    body.append(p);
+    if (c.request) body.append(mk("p", {}, t("chgReq") + c.request));
+  } else if (c.edits && c.edits.length) {
+    body.append(mk("p", {}, t("chgEdits")));
+    const ul = mk("ul");
+    for (const e of c.edits.slice().reverse()) ul.append(mk("li", {}, when(e.at) + (e.request ? " — " + e.request : "")));
+    body.append(ul);
+  }
+  if (c.changes && c.changes.length) {
+    body.append(mk("p", {}, t(c.kind === "copy" ? "chgList" : "chgLast")));
+    const ul = mk("ul");
+    for (const x of c.changes) ul.append(mk("li", {}, x));
+    body.append(ul);
+  } else if (!c.request && !(c.edits && c.edits.length)) body.append(mk("p", {}, t("chgNone")));
+}
+function chgToggle(open) {
+  const box = $("chgBox");
+  box.hidden = open === undefined ? !box.hidden : !open;
+  if (!(cur && cur.chg)) box.hidden = true;
+  $("chgBtn").setAttribute("aria-expanded", String(!box.hidden));
+  if (!box.hidden) renderChanges();
+}
+$("chgBtn").onclick = () => chgToggle();
+$("chgClose").onclick = () => chgToggle(false);
+
 const all = [];
 for (const g of subj.groups) for (const p of g.pages) all.push(p);
 let cur = null;
@@ -255,6 +328,7 @@ function choose(stem, fold) {
   $("bar").hidden = false;
   try { history.replaceState(null, "", "#" + cur.stem); localStorage.setItem("hub.last." + subj.id_c, cur.stem); } catch (e) {}
   if (fold && MQ.matches) $("menu").open = false;
+  if (!cur.chg) chgToggle(false);
   applyUi();
 }
 if (!all.length) {

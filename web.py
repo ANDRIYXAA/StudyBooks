@@ -568,7 +568,7 @@ async def api_engine(request: Request):
             raise HTTPException(400, L("такої моделі немає серед тих, що вміють викликати інструменти", "no such model among those that can call tools"))
         fields["openrouter_model"] = model
     cur = sp.prof().get("engines_on")
-    if isinstance(cur, list) and cur:           # the "switch between" box is in use: the engine joins the selection
+    if isinstance(cur, list):                   # the "switch between" box is in use (also when all is off): the engine joins the selection
         on = [e for e in sb.en.ORDER if e in set(cur) | {engine}]
         fields["engines_on"], fields["engine"] = on, on[0]
     sp.update_profile(blocked=None, blocked_at=None, **fields)
@@ -605,8 +605,9 @@ async def api_engines(request: Request):
         raise HTTPException(400, L("потрібен список двигунів", "a list of engines is needed"))
     on = [_need_engine(str(e)) for e in raw]
     on = [e for e in sb.en.ORDER if e in on]
-    if not on:
-        raise HTTPException(400, L("обери хоча б один двигун", "select at least one engine"))
+    if not on:              # everything off is allowed: the queue waits, nothing is sent to any engine
+        sp.update_profile(engines_on=[], blocked=None, blocked_at=None)
+        return {"ok": True, "switch": sb.engines_view(sp)}
     if "codex" in on and not sb.codex_allowed(sp):
         raise HTTPException(403, L("Codex через вхід ChatGPT потребує дозволу власника книги (вкладка «Адмін»)", "Codex with a ChatGPT sign-in needs the permission of the book's owner (Admin tab)"))
     missing = [sb.engine_label(e) for e in on if not await run_in_threadpool(sp.engine_connected, e)]
@@ -648,7 +649,7 @@ async def api_engine_key_remove(request: Request):
         raise HTTPException(400, L("невідомий двигун", "unknown engine"))
     sp.engine_key_file(engine).unlink(missing_ok=True)
     on = [e for e in sp.engines_on() if e != engine]
-    sp.update_profile(engines_on=on or None, engine=on[0] if on else None)        # nothing selected: back to the default engine
+    sp.update_profile(engines_on=on, engine=on[0] if on else None)        # nothing left: everything stays off (an empty list is a choice)
     return {"ok": True, "switch": sb.engines_view(sp)}
 
 
@@ -777,19 +778,20 @@ def grok_logout(request: Request):
     sp = who(request)
     sp.grok_forget()
     on = [e for e in sp.engines_on() if e != "grok" or sp.engine_connected("grok")]
-    sp.update_profile(engines_on=on or None, engine=on[0] if on else None)
+    sp.update_profile(engines_on=on, engine=on[0] if on else None)
     return {"ok": True, "switch": sb.engines_view(sp)}
 
 
 @app.post("/api/gemini/login")
 def gemini_login(request: Request):
-    """Start the Google sign-in of the Gemini CLI. The CLI wants a terminal, so it runs in a pseudo-terminal: it prints a
-    link, the person signs in with their Google account and copies the code that Google shows, and /api/gemini/code types
-    that code into the terminal. The CLI keeps its own credentials; this app never reads them."""
+    """Start the Google sign-in of Google's Antigravity CLI (`agy`, the replacement of the Gemini CLI). It runs a one-word
+    prompt in a pseudo-terminal: it prints a link, the person signs in with their Google account (a university account works)
+    and copies the code that Google shows, and /api/gemini/code types that code into the terminal. The CLI waits only 60
+    seconds for the code. It keeps its own credentials; this app never reads them, it only marks a sign-in that worked."""
     sp = who(request)
     gem = sb.gemini_bin()
     if not gem.exists():
-        raise HTTPException(503, L("Gemini CLI не встановлений на сервері", "The Gemini CLI is not installed on the server"))
+        raise HTTPException(503, L("Antigravity CLI не встановлений на сервері", "The Antigravity CLI is not installed on the server"))
     key = "gemini:" + sp.uid
     with _logins_lock:
         for uid, l in list(_logins.items()):
@@ -801,7 +803,8 @@ def gemini_login(request: Request):
         sp.gemini_prepare()
         m, s = pty.openpty()
         env = sp.gemini_env() | {"TERM": "xterm", "COLUMNS": "220", "LINES": "50"}
-        proc = subprocess.Popen([str(gem), "--skip-trust"], stdin=s, stdout=s, stderr=s, env=env, cwd=str(sp.gemini_home()), start_new_session=True)
+        proc = subprocess.Popen([str(gem), "-p", "Reply with the single word OK."], stdin=s, stdout=s, stderr=s, env=env,
+                                cwd=str(sp.gemini_home()), start_new_session=True)
         os.close(s)
         buf = bytearray()
         threading.Thread(target=_fd_reader, args=(m, buf), daemon=True).start()
@@ -819,7 +822,7 @@ def gemini_login(request: Request):
     if not url:
         with _logins_lock:
             _drop_login(key)
-        raise HTTPException(500, L("Gemini CLI не видав посилання для входу: ", "The Gemini CLI gave no sign-in link: ") + text[-300:])
+        raise HTTPException(500, L("Antigravity CLI не видав посилання для входу: ", "The Antigravity CLI gave no sign-in link: ") + text[-300:])
     return {"ok": True, "url": url}
 
 
@@ -834,15 +837,16 @@ async def gemini_code(request: Request):
     if not l or l["proc"].poll() is not None:
         raise HTTPException(409, L("вхід не розпочато або він завершився: почни ще раз", "the sign-in was not started or has ended: start it again"))
     os.write(l["fd"], (code + "\r").encode())
-    for _ in range(300):                                  # up to 30 s for the CLI to store the credentials
-        if sp.gemini_cli_ok():
+    for _ in range(600):                                  # up to 60 s: the CLI stores the credentials, answers "OK" and ends
+        if l["proc"].poll() is not None:
             break
         time.sleep(0.1)
-    ok = sp.gemini_cli_ok()
     text = re.sub(r"\x1b\[[0-9;?<]*[A-Za-z]", "", bytes(l["buf"]).decode("utf-8", "replace"))
+    ok = l["proc"].poll() == 0 and not re.search(r"error|authentication (?:failed|timed out)", text, re.I)
     with _logins_lock:
         _drop_login("gemini:" + sp.uid)
     if ok:
+        sp.gemini_mark_ok()
         sp.update_profile(blocked=None, blocked_at=None)
         kick()
     return {"ok": ok, "message": None if ok else text[-300:]}
@@ -853,7 +857,7 @@ def gemini_logout(request: Request):
     sp = who(request)
     sp.gemini_forget()
     on = [e for e in sp.engines_on() if e != "gemini" or sp.engine_connected("gemini")]
-    sp.update_profile(engines_on=on or None, engine=on[0] if on else None)
+    sp.update_profile(engines_on=on, engine=on[0] if on else None)
     return {"ok": True, "switch": sb.engines_view(sp)}
 
 
@@ -865,7 +869,7 @@ def codex_logout(request: Request):
         subprocess.run([str(codex), "logout"], env=sp.codex_env(), capture_output=True, timeout=60, stdin=subprocess.DEVNULL)
     sp.forget_codex_status()
     on = [e for e in sp.engines_on() if e != "codex"]
-    sp.update_profile(engines_on=on or None, engine=on[0] if on else None)        # nothing selected: back to the default engine
+    sp.update_profile(engines_on=on, engine=on[0] if on else None)        # nothing left: everything stays off
     return {"ok": True, "switch": sb.engines_view(sp)}
 
 
@@ -1908,6 +1912,26 @@ def combined_rows(lib, sid, uid=None, owner=False):
     return rows
 
 
+def page_changes(idir, stem, by_stem, signed):
+    """What was changed on one interactive page, for the "Changed" button of a combined page; None when nothing was.
+    A copy of somebody else's page has `from` (the page it was made from); a page changed in place has `edits`.
+    The request texts (written by a person) go only to people who signed in; no uid goes out."""
+    m = sb.read_json(Path(idir) / f"{stem}.json", {}) or {}
+    changes = [str(c)[:200] for c in m.get("changes") or [] if isinstance(c, str)][:12] if isinstance(m.get("changes"), list) else []
+    if m.get("from"):
+        o = by_stem.get(str(m["from"]))
+        out = {"kind": "copy", "at": m.get("added"), "changes": changes,
+               "from": {"stem": o["stem"], "title": o["title"] or o["stem"], "url": o["url"]} if o else None}
+        if signed and m.get("request"):
+            out["request"] = str(m["request"])[:300]
+        return out
+    edits = [e for e in m.get("edits") or [] if isinstance(e, dict)][-10:] if isinstance(m.get("edits"), list) else []
+    if not (m.get("edited") or edits):
+        return None
+    return {"kind": "edit", "at": m.get("edited"), "changes": changes,
+            "edits": [{"at": e.get("at")} | ({"request": str(e.get("request") or "")[:300]} if signed else {}) for e in edits]}
+
+
 @app.get("/c/{subject}/{cid}", response_class=HTMLResponse)
 def combined_page(request: Request, subject: str, cid: str):
     """A combined page: the menu of the chosen pages of ONE subject, the picked page opens below in a sandboxed frame."""
@@ -1919,8 +1943,15 @@ def combined_page(request: Request, subject: str, cid: str):
     combo = COMBINE.get(idir, cid) if s else None
     if not combo:
         raise HTTPException(404, L("такої зведеної сторінки немає", "no such combined page"))
+    pages = sb.interactive_pages(sp, subject)
+    groups = COMBINE.view(combo, pages)
+    signed = not PUBLIC or bool(ACC.read_session(KEY, request.cookies.get(COOKIE) or ""))
+    by_stem = {p["stem"]: p for p in pages}
+    for g in groups:
+        for p in g["pages"]:
+            p["chg"] = page_changes(idir, p["stem"], by_stem, signed)
     data = {"subject": {"id": s["id"], "title": s["title"], "page_title": combo["title"], "id_c": combo["id"],
-                        "groups": COMBINE.view(combo, sb.interactive_pages(sp, subject))}}
+                        "groups": groups}}
     js = json.dumps(data, ensure_ascii=True).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
     return HTMLResponse(page_text(HUB).replace("__DATA__", js),
                         headers={"Cache-Control": "no-store", "Content-Security-Policy": HUB_CSP,
