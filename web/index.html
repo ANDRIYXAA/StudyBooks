@@ -8,6 +8,10 @@
 <style>
 /* Dark editorial poster look (the person's references: grain, halftone, soft blurred light, bold + light type).
    Every effect is a static background drawn once: no filters, no blur(), no animation except the small spinner. */
+/* the site font: Lack UA (Latin by Velvetyne, Ukrainian Cyrillic by LevType), SIL OFL 1.1, web/fonts/LackUA-OFL.txt.
+   It has one weight (400): the browser draws bold (600+) from it, light (300) uses the regular. */
+@font-face { font-family: "Lack UA"; src: url("/fonts/LackUA-Regular.woff2") format("woff2"); font-style: normal; font-weight: 400; font-display: swap; }
+@font-face { font-family: "Lack UA"; src: url("/fonts/LackUA-Italic.woff2") format("woff2"); font-style: italic; font-weight: 400; font-display: swap; }
 :root {
   color-scheme: dark;
   --bg: #0b0b0b; --panel: rgba(20,20,20,.68); --ink: #ececea; --muted: #a3a3a0; --line: #2e2e2e; --hair: #222222;
@@ -15,7 +19,7 @@
   --bg0: #101010; --pillbg: rgba(11,11,11,.7); --dlg: #141414; --dot: rgba(236,236,234,.10); --line2: #4a4a4a;
   --ph: #8a8a87; --ul: #6a6a6a; --shade: rgba(0,0,0,.7);
   --radius: 0;
-  --sans: "Helvetica Neue", "Segoe UI", Roboto, "Noto Sans", Arial, system-ui, sans-serif;   /* Segoe/Roboto have a real light weight, Arial has not */
+  --sans: "Lack UA", "Helvetica Neue", "Segoe UI", Roboto, "Noto Sans", Arial, system-ui, sans-serif;   /* Segoe/Roboto have a real light weight, Arial has not */
   --mono: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 }
 /* light theme: the same layout, paper-white page; the poster stays a printed poster in both */

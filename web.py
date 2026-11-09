@@ -50,6 +50,7 @@ app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 INDEX = Path(__file__).resolve().parent / "web" / "index.html"
 HUB = Path(__file__).resolve().parent / "web" / "hub.html"
 GLASS_JS = Path(__file__).resolve().parent / "web" / "glass.js"
+FONTS = Path(__file__).resolve().parent / "web" / "fonts"      # the site font (Lack UA, SIL OFL, see web/fonts/LackUA-OFL.txt)
 
 
 def page_text(path: Path) -> str:
@@ -257,7 +258,7 @@ def safe_name(name, i):
 
 
 PAGE_CSP = ("default-src 'none'; script-src 'unsafe-inline' https://challenges.cloudflare.com; style-src 'unsafe-inline'; "
-            "img-src 'self' data: blob:; connect-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; "
+            "img-src 'self' data: blob:; font-src 'self'; connect-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; "
             "worker-src blob:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 
 
@@ -293,6 +294,15 @@ def index():
     if PUBLIC:
         headers["Content-Security-Policy"] = PAGE_CSP
     return HTMLResponse(page_text(INDEX), headers=headers)
+
+
+@app.get("/fonts/{name}")
+def font_file(name: str):
+    """The site font. Only the .woff2 files in web/fonts, open to everybody (no data in them), cached for a month."""
+    if not re.fullmatch(r"[A-Za-z0-9-]+\.woff2", name) or not (FONTS / name).is_file():
+        raise HTTPException(404)
+    return FileResponse(FONTS / name, media_type="font/woff2",
+                        headers={"Cache-Control": "public, max-age=2592000", "X-Content-Type-Options": "nosniff"})
 
 
 # ---------------------------------------------------------------- public side: sign-up, sign-in, human check
@@ -1894,7 +1904,7 @@ def interactive(request: Request, subject: str, name: str):
         "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer"})
 
 
-HUB_CSP = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-src 'self'; connect-src 'self'; img-src data:; "
+HUB_CSP = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-src 'self'; connect-src 'self'; img-src data:; font-src 'self'; "
            "base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 
 

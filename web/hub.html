@@ -5,11 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Interactive pages</title>
 <style>
+  /* the site font Lack UA (SIL OFL 1.1, web/fonts/LackUA-OFL.txt), one weight 400: bold is drawn by the browser */
+  @font-face { font-family: "Lack UA"; src: url("/fonts/LackUA-Regular.woff2") format("woff2"); font-style: normal; font-weight: 400; font-display: swap; }
+  @font-face { font-family: "Lack UA"; src: url("/fonts/LackUA-Italic.woff2") format("woff2"); font-style: italic; font-weight: 400; font-display: swap; }
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
   html, body { height: 100%; }
   body { margin: 0; background: #0b0b0b; color: #f1f1ee; display: flex; flex-direction: column;
-         font-family: "Segoe UI", Roboto, Arial, sans-serif; }
+         font-family: "Lack UA", "Segoe UI", Roboto, Arial, sans-serif; }
   header { padding: 14px 28px 6px; position: relative; }
   .langbar { position: absolute; top: 12px; right: 28px; display: flex; }
   .langbar button { padding: 5px 14px; font-size: 13px; }
@@ -40,7 +43,7 @@
   .edit { padding: 0 28px 14px; }
   .edit p { margin: 0 0 6px; color: #a8a8a2; font-size: 13px; }
   .edit textarea { width: 100%; min-height: 84px; resize: vertical; background: #111; color: #f1f1ee; border: 1px solid #5a5a55; padding: 10px;
-                   font: 14px/1.4 "Segoe UI", Roboto, Arial, sans-serif; border-radius: 0; }
+                   font: 14px/1.4 "Lack UA", "Segoe UI", Roboto, Arial, sans-serif; border-radius: 0; }
   .edit .erow { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
   .edit .erow button { padding: 7px 14px; font-size: 14px; }
   .edit .emsg { font-size: 13px; color: #a8a8a2; }
@@ -64,7 +67,7 @@
   @property --q { syntax:"<percentage>"; inherits:true; initial-value:30%; }
   @property --p { syntax:"<length>"; inherits:true; initial-value:0px; }
   .gbtn { --p0:0px; --r:1; --b0:50%; --dir:90deg; --b:var(--b0); --q:var(--b0); --p:var(--p0); position:relative; display:inline-flex; align-items:center;
-    min-height:34px; padding:0; border:0; background:none; isolation:isolate; cursor:pointer; color:var(--bt); font:600 14px "Segoe UI", Roboto, Arial, sans-serif; }
+    min-height:34px; padding:0; border:0; background:none; isolation:isolate; cursor:pointer; color:var(--bt); font:600 14px "Lack UA", "Segoe UI", Roboto, Arial, sans-serif; }
   .gbtn::before { content:""; position:absolute; inset:0; z-index:-1; pointer-events:none; background:
     repeating-linear-gradient(180deg, rgba(var(--gl1),.6) 0, rgba(var(--gl1),.08) calc(var(--r)*1.2px), rgba(var(--gl2),.5) calc(var(--r)*3px), rgba(var(--gl2),0) calc(var(--r)*4.4px), rgba(var(--gl1),.2) calc(var(--r)*5.5px)) 0 var(--p),
     repeating-linear-gradient(180deg, rgba(var(--gl2),0) 0, rgba(var(--gl1),.45) calc(var(--r)*2.4px), rgba(var(--gl2),.6) calc(var(--r)*4.6px), rgba(var(--gl2),0) calc(var(--r)*7.3px), rgba(var(--gl1),.1) calc(var(--r)*9px)) 0 calc(var(--p)*-1.3),
