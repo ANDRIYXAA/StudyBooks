@@ -533,9 +533,10 @@ async def claude_code(request: Request):
     sp.forget_claude_status()
     st = sp.claude_status(fresh=True)
     if st.get("loggedIn"):
-        prof = sb.read_json(sp.profile, {}) or {}
-        prof.pop("blocked", None)
-        sb.write_json(sp.profile, prof)
+        for s in [sp] + sp.linked():             # linked accounts share this sign-in (SB_LINKED)
+            prof = sb.read_json(s.profile, {}) or {}
+            prof.pop("blocked", None)
+            sb.write_json(s.profile, prof)
         kick()
     return {"ok": bool(st.get("loggedIn")), "email": st.get("email"),
             "message": None if st.get("loggedIn") else re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", out)[-400:]}
@@ -702,7 +703,7 @@ def codex_login(request: Request):
     codex = sb.codex_bin()
     if not codex.exists():
         raise HTTPException(503, L("Codex не встановлений на сервері", "Codex is not installed on the server"))
-    (sp.root / "codex").mkdir(exist_ok=True)
+    (sp.login_root / "codex").mkdir(exist_ok=True)
     return _device_login(sp, "codex", [str(codex), "login", "--device-auth"], sp.codex_env(), str(sp.root))
 
 
@@ -1006,7 +1007,7 @@ async def api_or_free_save(request: Request):
 def api_or_free_reset(request: Request):
     """Lift all pauses (e.g. after buying credits, which raises the daily limit)."""
     sp = who(request)
-    (sp.root / "or_state.json").unlink(missing_ok=True)
+    (sp.login_root / "or_state.json").unlink(missing_ok=True)
     kick()
     return {"ok": True}
 

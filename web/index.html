@@ -1164,6 +1164,7 @@ const D = [
   ["sw.rest", t => `ліміт до ${t}`, t => `limit until ${t}`],
   ["sw.noConn", "підключи в вкладці нижче", "connect it in the tab below"],
   ["sw.saved", "Збережено", "Saved"],
+  ["sw.linked", n => `Входи спільні з акаунтом ${n}: підключення чи вихід тут діє і там, і донати на будь-який із них працюють для обох.`, n => `The sign-ins are shared with the account ${n}: a sign-in or sign-out here also works there, and donations to either account work for both.`],
   ["sw.off", "Усі двигуни вимкнено: черга стоїть і нічого не витрачається", "All engines are off: the queue waits and nothing is spent"],
   ["codex.intro", "Codex працює з твоєю підпискою ChatGPT: сервер запускає незмінений Codex CLI, ти відкриваєш посилання, вводиш одноразовий код, і Codex сам зберігає вхід (сервер його не читає).",
    "Codex works with your ChatGPT plan: the server runs the unmodified Codex CLI, you open the link, enter the one-time code, and Codex stores the sign-in itself (the server does not read it)."],
@@ -1859,7 +1860,7 @@ function switchBox() {
         <button type="button" class="swName" data-swtab="${esc(n)}" title="${esc(dis ? t("sw.noConn") : "")}" style="background:none;border:0;padding:2px 0;color:inherit;font:inherit;cursor:pointer;text-decoration:${dis ? "underline dotted" : "underline"};text-underline-offset:3px">${esc(e.label)}</button>${
         e.cool ? ` <span class="tag warn">${esc(t("sw.rest", swHM(e.cool)))}</span>` : ""}</span>`;
     }).join("")}</div>
-    <div class="small muted" style="margin-top:6px">${esc(t("sw.note"))}</div><div class="msg" id="swMsg"></div></div>`;
+    <div class="small muted" style="margin-top:6px">${esc(t("sw.note"))}</div>${(W.linked || []).length ? `<div class="small muted" style="margin-top:4px">${esc(t("sw.linked", W.linked.join(", ")))}</div>` : ""}<div class="msg" id="swMsg"></div></div>`;
 }
 function bindSwitch() {
   document.querySelectorAll("button[data-swtab]").forEach(b => b.onclick = () => { dtab = b.dataset.swtab; renderDlg(); });     // the name opens the tab of the engine: sign in there

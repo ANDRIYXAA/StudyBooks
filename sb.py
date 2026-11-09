@@ -271,6 +271,31 @@ def clear_progress():
 
 # ---------------------------------------------------------------- spaces (one per person)
 
+# ---- linked accounts: one person with several accounts (for example the tailnet admin and a public login) has ONE set
+# of sign-ins. SB_LINKED in .env: groups split by ";", the uids of one group split by ","; the first uid is the home of
+# the group. Claude, Codex, Grok and Gemini sign-ins, the keys, and their limits and rests live in the home folder, so a
+# sign-in (or a sign-out) in one account is the same in all of them. Books, queue and settings stay per account.
+# Donations to any account of the group can be used by every account of the group (the donor's cap is for the group).
+
+def link_groups():
+    out, seen = [], set()
+    for g in os.environ.get("SB_LINKED", "").split(";"):
+        uids = []
+        for x in g.split(","):
+            x = x.strip().lower()
+            if re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", x) and x not in uids and x not in seen:
+                uids.append(x)
+        if len(uids) > 1:
+            out.append(uids)
+            seen.update(uids)
+    return out
+
+
+def linked_uids(uid):
+    """The uids of the group of `uid`, the home first; just [uid] when it is in no group."""
+    return next((g for g in link_groups() if uid in g), [uid])
+
+
 class Space:
     def __init__(self, uid):
         if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", uid):
@@ -281,6 +306,18 @@ class Space:
         self.syllabus = self.root / "syllabus.yaml"
         self.dirty = self.root / "dirty.json"
         self.profile = self.root / "profile.json"
+
+    @property
+    def login_root(self):
+        """Where the sign-ins of this account live: the own folder, or the home folder of its linked group (SB_LINKED)."""
+        home = linked_uids(self.uid)[0]
+        if home == self.uid or not (USERS / home / "profile.json").exists():
+            return self.root
+        return USERS / home
+
+    def linked(self):
+        """The other accounts of the same person (SB_LINKED), not this one."""
+        return [Space(u) for u in linked_uids(self.uid) if u != self.uid and (USERS / u / "profile.json").exists()]
 
     def ensure(self, login=None, name=None):
         for p in self.d.values():
@@ -338,13 +375,13 @@ class Space:
     def claude_env(self):
         env = {k: v for k, v in os.environ.items()
                if k not in ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")}
-        env["CLAUDE_CONFIG_DIR"] = str(self.d["claude"])
+        env["CLAUDE_CONFIG_DIR"] = str(self.login_root / "claude")
         env["BROWSER"] = "true"   # never try to open a browser on the server
         return env
 
     def claude_status(self, fresh=False):
         """{'loggedIn': bool, 'email': ...} from `claude auth status`, cached for 2 minutes."""
-        cache = self.root / "claude_status.json"
+        cache = self.login_root / "claude_status.json"
         c = read_json(cache)
         if c and not fresh and time.time() - c.get("_t", 0) < 120:
             return c
@@ -367,12 +404,12 @@ class Space:
         return out
 
     def forget_claude_status(self):
-        (self.root / "claude_status.json").unlink(missing_ok=True)
+        (self.login_root / "claude_status.json").unlink(missing_ok=True)
 
     # ---- which engine processes this person's material
     @property
     def or_key_file(self):
-        return self.root / "openrouter.key"
+        return self.login_root / "openrouter.key"
 
     def prof(self):
         return read_json(self.profile, {}) or {}
@@ -409,7 +446,7 @@ class Space:
         return [self.engine()]
 
     def engine_key_file(self, name):
-        return self.root / f"{name}.key"
+        return self.login_root / f"{name}.key"
 
     def engine_key(self, name):
         try:
@@ -426,20 +463,20 @@ class Space:
 
     def codex_env(self):
         env = {k: v for k, v in os.environ.items() if k not in ("OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN")}
-        env["CODEX_HOME"] = str(self.root / "codex")
+        env["CODEX_HOME"] = str(self.login_root / "codex")
         env["BROWSER"] = "true"
         return env
 
     def codex_status(self, fresh=False):
         """{'loggedIn': bool, 'text': ...} from `codex login status` (exit code 0 = signed in), cached for 2 minutes."""
-        cache = self.root / "codex_status.json"
+        cache = self.login_root / "codex_status.json"
         c = read_json(cache)
         if c and not fresh and time.time() - c.get("_t", 0) < 120:
             return c
         out = {"loggedIn": False}
         if codex_bin().exists():
             try:
-                (self.root / "codex").mkdir(exist_ok=True)
+                (self.login_root / "codex").mkdir(exist_ok=True)
                 p = subprocess.run([str(codex_bin()), "login", "status"], capture_output=True, text=True, timeout=30,
                                    env=self.codex_env(), stdin=subprocess.DEVNULL)
                 out = {"loggedIn": p.returncode == 0, "text": " ".join((p.stdout or p.stderr or "").split())[:160]}
@@ -450,11 +487,11 @@ class Space:
         return out
 
     def forget_codex_status(self):
-        (self.root / "codex_status.json").unlink(missing_ok=True)
+        (self.login_root / "codex_status.json").unlink(missing_ok=True)
 
     # ---- Grok: the official Grok Build CLI with an xAI sign-in (the API key way stays as the other option)
     def grok_home(self):
-        return self.root / "grok"
+        return self.login_root / "grok"
 
     def grok_cli_ok(self):
         """Signed in: the CLI keeps its credentials in <HOME>/.grok/auth.json, and HOME is this person's own folder."""
@@ -474,7 +511,7 @@ class Space:
     # Google closed the sign-in of the old Gemini CLI for personal accounts; `agy` replaces it and uses the same models.
     # The CLI keeps its own credentials under HOME (a folder of the person); the app only writes a marker when a sign-in worked.
     def gemini_home(self):
-        return self.root / "gemini"
+        return self.login_root / "gemini"
 
     def _gemini_marker(self):
         return self.gemini_home() / ".gemini" / "sb_signed_in"
@@ -518,7 +555,7 @@ class Space:
 
     def engine_cool_get(self):
         """{engine: {"until": epoch, "why": str}} of the engines that rest after a limit (an old entry is dropped)."""
-        c = read_json(self.root / "engine_cool.json", {}) or {}
+        c = read_json(self.login_root / "engine_cool.json", {}) or {}
         now_ = time.time()
         return {k: v for k, v in c.items() if k in en.ORDER and isinstance(v, dict) and v.get("until", 0) > now_}
 
@@ -526,13 +563,13 @@ class Space:
         with STATE_LOCK:
             c = self.engine_cool_get()
             c[name] = {"until": float(until), "why": str(why)[:200], "at": now_iso()}
-            write_json(self.root / "engine_cool.json", c)
+            write_json(self.login_root / "engine_cool.json", c)
 
     def engine_cool_clear(self, name=None):
         with STATE_LOCK:
             c = self.engine_cool_get()
             c.pop(name, None) if name else c.clear()
-            write_json(self.root / "engine_cool.json", c)
+            write_json(self.login_root / "engine_cool.json", c)
 
     def engine_chain(self):
         """The selected engines that can work now, in order: connected and not resting after a limit."""
@@ -572,7 +609,7 @@ class Space:
         Claude only: the numbers are what Claude Code reported during the last runs (note_claude_limits)."""
         if self.engine() != "claude":
             return None
-        lim = (read_json(self.root / "claude_usage.json", {}) or {}).get("limits") or {}
+        lim = (read_json(self.login_root / "claude_usage.json", {}) or {}).get("limits") or {}
         ack = self.prof().get("limit_ack") or {}
         now_, worst = time.time(), None
         for typ, v in lim.items():
@@ -594,7 +631,7 @@ class Space:
 
     def ack_limits(self):
         """"Continue": every window may go on up to its next step."""
-        lim = (read_json(self.root / "claude_usage.json", {}) or {}).get("limits") or {}
+        lim = (read_json(self.login_root / "claude_usage.json", {}) or {}).get("limits") or {}
         ack = {}
         for typ, v in lim.items():
             if v.get("util") is not None:
@@ -962,7 +999,7 @@ def note_claude_limits(sp, infos):
     """Remember what Claude Code said about this person's plan limits (session, week, …), for the usage bar."""
     if not infos:
         return
-    f = sp.root / "claude_usage.json"
+    f = sp.login_root / "claude_usage.json"
     st = read_json(f, {}) or {}
     lim = st.setdefault("limits", {})
     for i in infos:
@@ -984,7 +1021,7 @@ def note_spend(sp, usd):
     of the window is used, the two give the size of a whole window in dollars (`window_usd`): that is how "at most 20 %
     of the 5-hour window" is turned into a budget for the learning session. Other use of the same login (the Telegram
     bot, the person's own Claude Code) is not seen here, so the estimate errs on the small, careful side."""
-    f = sp.root / "claude_usage.json"
+    f = sp.login_root / "claude_usage.json"
     st = read_json(f, {}) or {}
     fh = (st.get("limits") or {}).get("five_hour") or {}
     resets = fh.get("resets")
@@ -1015,7 +1052,7 @@ def usage_view(sp):
             out = {"engine": "openrouter", "auto": True, "used": a["used_today"], "cap": a["cap"], "until": a["all_until"],
                    "paid": a["paid"], "own": bool(sp.or_key())}
     else:
-        lim = (read_json(sp.root / "claude_usage.json", {}) or {}).get("limits") or {}
+        lim = (read_json(sp.login_root / "claude_usage.json", {}) or {}).get("limits") or {}
         now_ = time.time()
         rows = [{"type": k, "status": v.get("status"), "util": v.get("util"), "resets": v.get("resets"), "overage": v.get("overage"),
                  "seen": v.get("seen")} for k, v in lim.items() if not v.get("resets") or v["resets"] > now_]
@@ -1462,7 +1499,7 @@ def _or_live_fetch(sp, key):
             if ans["remaining"] > 0 and (st.get("all_until") or 0) > time.time() and re.search(r"добов|daily", str(st.get("all_why") or ""), re.I):
                 st.pop("all_until", None)          # parked for the daily limit, but OpenRouter says there is room (a top-up?)
                 st.pop("all_why", None)
-                write_json(sp.root / "or_state.json", st)
+                write_json(sp.login_root / "or_state.json", st)
                 log(f"[{sp.uid}] openrouter: the daily-limit pause is lifted, OpenRouter shows {ans['remaining']} requests left")
     return ans
 
@@ -1537,7 +1574,7 @@ def or_free_ranked(sp, fetch=True):
 
 
 def or_state(sp):
-    return read_json(sp.root / "or_state.json", {}) or {}
+    return read_json(sp.login_root / "or_state.json", {}) or {}
 
 
 def _next_utc_midnight():
@@ -1569,7 +1606,7 @@ def or_hide(sp, model, days=OR_HIDE_DAYS):
     with STATE_LOCK:
         st = or_state(sp)
         st.setdefault("hidden", {})[model] = time.time() + days * 86400
-        write_json(sp.root / "or_state.json", st)
+        write_json(sp.login_root / "or_state.json", st)
     log(f"[{sp.uid}] openrouter: {model} left out of the list for {days} days (not available to apps like this one)")
 
 
@@ -1582,7 +1619,7 @@ def or_cool(sp, model, seconds, why):
         n = prev.get("n", 0) + 1 if time.time() - prev.get("at", 0) < 3600 else 1
         secs = seconds if seconds else min(3600, 65 * 2 ** (n - 1))
         cool[model] = {"until": time.time() + secs, "why": str(why)[:120], "n": n, "at": time.time()}
-        write_json(sp.root / "or_state.json", st)
+        write_json(sp.login_root / "or_state.json", st)
     log(f"[{sp.uid}] openrouter: {model} parked for {int(secs)}s ({why})")
 
 
@@ -1590,7 +1627,7 @@ def or_cool_all(sp, until, why):
     with STATE_LOCK:
         st = or_state(sp)
         st["all_until"], st["all_why"] = until, why
-        write_json(sp.root / "or_state.json", st)
+        write_json(sp.login_root / "or_state.json", st)
     log(f"[{sp.uid}] openrouter: all free models parked until {_hm(until)} ({why})")
 
 
@@ -1601,7 +1638,7 @@ def or_note_request(sp):
         if st.get("day") != day:
             st["day"], st["used"] = day, 0
         st["used"] = st.get("used", 0) + 1
-        write_json(sp.root / "or_state.json", st)
+        write_json(sp.login_root / "or_state.json", st)
 
 
 _or_last = {}
@@ -1668,6 +1705,17 @@ def uid_by_nick(nick):
     return found[0] if len(found) == 1 else None
 
 
+def donor_named(d, sp):
+    """(uid, cap): the account of `sp`'s group that the donor `d` named, and the cap; (None, 0) when none. The own uid
+    first, so an account that was named itself counts on its own name. The counter is per named account, so the cap holds
+    for the whole group."""
+    don = d.prof().get("or_donate") or {}
+    for u in [sp.uid] + [u for u in linked_uids(sp.uid) if u != sp.uid]:
+        if don.get(u):
+            return u, don[u]
+    return None, 0
+
+
 def donated_today(donor, uid):
     j = read_json(donor.root / "donated.json", {}) or {}
     return int((j.get("n") or {}).get(uid, 0)) if j.get("day") == utc_day() else 0
@@ -1708,14 +1756,14 @@ def or_donors(sp, cached=True):
     hit = _donor_cache.get(sp.uid)
     if cached and hit and time.time() - hit[0] < DONATE_CACHE_S:
         return hit[1]
-    now_, found = time.time(), []
+    now_, found, group = time.time(), [], set(linked_uids(sp.uid))
     for d in spaces():
-        if d.uid == sp.uid:
+        if d.uid in group or d.uid == sp.uid:
             continue
-        cap = (d.prof().get("or_donate") or {}).get(sp.uid)
-        if not cap or not d.or_key() or (or_state(d).get("all_until") or 0) > now_:
+        named, cap = donor_named(d, sp)
+        if not cap or not d.or_key() or d.or_key() == sp.or_key() or (or_state(d).get("all_until") or 0) > now_:
             continue
-        left = donor_left(d, sp.uid, cap, block=not cached)
+        left = donor_left(d, named, cap, block=not cached)
         if left > 0:
             found.append((left, d))
     found.sort(key=lambda x: -x[0])
@@ -1797,7 +1845,7 @@ def donate_view(sp):
     given = [{"id": donate_id(u), "name": display_name(u), "cap": c, "used": donated_today(sp, u)}
              for u, c in (prof.get("or_donate") or {}).items()]
     lv = or_live(sp, block=False)
-    got = [{"name": display_name(d.uid), "left": donor_left(d, sp.uid, (d.prof().get("or_donate") or {}).get(sp.uid, 0))}
+    got = [{"name": display_name(d.uid), "left": donor_left(d, donor_named(d, sp)[0], donor_named(d, sp)[1])}
            for d in or_donors(sp)]
     return {"to": given, "from": got, "max": DONATE_MAX, "default": DONATE_DEFAULT, "people": DONATE_MAX_PEOPLE,
             "limit": lv["limit"] if lv else None}      # the donor's real daily limit on OpenRouter (50 or 1000), if known
@@ -1811,13 +1859,13 @@ def donor_rows(sp, cached=True):
     hit = _donor_rows_cache.get(sp.uid)
     if cached and hit and time.time() - hit[0] < DONATE_CACHE_S:
         return hit[1]
-    now_, rows = time.time(), []
+    now_, rows, group = time.time(), [], set(linked_uids(sp.uid))
     for d in spaces():
-        cap = (d.prof().get("or_donate") or {}).get(sp.uid) if d.uid != sp.uid else None
+        named, cap = donor_named(d, sp) if d.uid not in group and d.uid != sp.uid else (None, 0)
         if not cap or not d.or_key():
             continue
         eff = donor_cap(d, cap)                  # never more than the donor's real daily limit on OpenRouter
-        left = donor_left(d, sp.uid, cap)        # ...and never more than what is really left on the donor's key
+        left = donor_left(d, named, cap)         # ...and never more than what is really left on the donor's key
         rows.append({"name": display_name(d.uid), "used": eff - left, "cap": eff, "left": left,
                      "paused": (or_state(d).get("all_until") or 0) > now_})
     _donor_rows_cache[sp.uid] = (time.time(), rows)
@@ -2131,7 +2179,7 @@ def _run_openrouter(sp, prompt, cwd, add_dirs, timeout, need_vision, role, slot)
             or_throttle(ow)
             or_note_request(ow)
             if donated:
-                donate_note(ow, sp.uid)
+                donate_note(ow, donor_named(ow, sp)[0] or sp.uid)
         try:
             resp = _or_chat(key, {"model": model, "messages": msgs, "tools": OR_TOOLS, "tool_choice": "auto",
                                   "usage": {"include": True}}, min(300, left), retry_429=not auto)
@@ -2597,7 +2645,8 @@ def engines_view(sp):
             d.update(loggedIn=bool(cs.get("loggedIn")), text=cs.get("text"), allowed=owner,
                      installed=codex_bin().exists(), effort=sp.prof().get("codex_effort") or "")
         out[n] = d
-    return {"order": list(en.ORDER), "engines": out, "on": on, "chain": sp.engine_chain()}
+    return {"order": list(en.ORDER), "engines": out, "on": on, "chain": sp.engine_chain(),
+            "linked": [display_name(s.uid) for s in sp.linked()]}
 
 
 # ---------------------------------------------------------------- the skill: how material is added
@@ -7437,14 +7486,14 @@ def learn_evidence(main, st=None):
 
 def learn_budget(main):
     """(dollars for one session, how it was found): LEARN_SHARE of the measured 5-hour window, else the default."""
-    w = (read_json(main.root / "claude_usage.json", {}) or {}).get("window_usd")
+    w = (read_json(main.login_root / "claude_usage.json", {}) or {}).get("window_usd")
     if w:
         return round(LEARN_SHARE * float(w), 2), "measured"
     return LEARN_USD_DEFAULT, "default"
 
 
 def five_hour_util(sp):
-    fh = ((read_json(sp.root / "claude_usage.json", {}) or {}).get("limits") or {}).get("five_hour") or {}
+    fh = ((read_json(sp.login_root / "claude_usage.json", {}) or {}).get("limits") or {}).get("five_hour") or {}
     return fh.get("util") if fh.get("resets") and fh["resets"] > time.time() else None
 
 
@@ -7742,7 +7791,7 @@ def check_openrouter_paid(st, sp, prof, row):
     if now_paid and not was:
         if (ost.get("all_until") or 0) > time.time() and used < 1000:
             ost.pop("all_until", None)            # parked by the old 50-a-day cap: lift it
-            write_json(sp.root / "or_state.json", ost)
+            write_json(sp.login_root / "or_state.json", ost)
         sv_event(st, "act", "or_paid", "На OpenRouter поповнено рахунок: тепер 1000 безкоштовних запитів на добу (було 50). "
                  "Паузу через добовий ліміт знято.", "OpenRouter credits were bought: 1000 free requests a day now "
                  "(was 50). The daily-limit pause was lifted.", uid=sp.uid, dedupe=30 * 86400)
